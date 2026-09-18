@@ -1,0 +1,20 @@
+model UserProfile {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Extended Profile Fields
+  city        String?
+  state       String?
+  dateOfBirth DateTime?
+  gender      String?
+  bio         String?
+
+  // E.g. Individual vs Business (if not handled by Seller/Role models)
+  memberType String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}

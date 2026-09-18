@@ -1,0 +1,18 @@
+model Language {
+  id        String   @id @default(cuid())
+  code      String   @unique // ISO 639-1 e.g. "en", "ar", "fr", "de"
+  name      String   // e.g. "English", "Arabic"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Currency {
+  id        String   @id @default(cuid())
+  code      String   @unique // ISO 4217 e.g. "AED", "USD", "SAR", "ZAR", "GBP"
+  name      String   // e.g. "UAE Dirham", "US Dollar", "Saudi Riyal", "South African Rand"
+  symbol    String   // e.g. "AED", "$", "SAR", "R", "£", "€"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

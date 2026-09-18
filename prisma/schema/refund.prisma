@@ -1,0 +1,46 @@
+// ---------------------------------------------------------------------------
+// Refund — a request to return money to a buyer.
+//
+// Owned by the Transaction Server. The Main Backend may read refund status via
+// the Transaction Server API, but must never write this table.
+// ---------------------------------------------------------------------------
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+model Refund {
+  id             String       @id @default(cuid())
+
+  /// Cross-service reference to a Payment row. No Prisma relation.
+  paymentId      String
+
+  stripeRefundId String?      @unique
+  stripeChargeId String?
+  amountMinor    BigInt
+  currency       String       @default("AED")
+  reasonCode     String
+  reasonNote     String?
+  status         RefundStatus @default(REQUESTED)
+
+  /// Cross-service IDs stored as plain scalars.
+  requestedById String
+  approvedById  String?
+
+  approvedAt          DateTime?
+  ledgerTransactionId String?
+  failureCode         String?
+  failureMessage      String?
+  idempotencyKey      String   @unique
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([paymentId])
+  @@index([status])
+  @@map("refunds")
+}

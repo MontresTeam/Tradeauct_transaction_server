@@ -1,0 +1,18 @@
+model SellerAccessApplication {
+  id                        String    @id @default(uuid())
+  name                      String
+  email                     String
+  companyName               String?
+  country                   String
+  sellerType                String
+  estimatedListingsPerMonth String?
+  primaryCategories         String?
+  phone                     String?
+  status                    String    @default("PENDING")
+  notes                     String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  @@index([email])
+  @@index([status])
+}

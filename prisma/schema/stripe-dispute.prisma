@@ -1,0 +1,46 @@
+// ---------------------------------------------------------------------------
+// Stripe dispute and event dedup — pure Stripe infrastructure.
+//
+// StripeDispute  — a chargeback raised by Stripe against a payment.
+// StripeEventLog — idempotency log for processed Stripe webhook event IDs.
+//
+// Both owned by the Transaction Server. Stripe webhooks must be handled by
+// the Transaction Server directly (not proxied through the Main Backend).
+// ---------------------------------------------------------------------------
+
+enum StripeDisputeStatus {
+  NEEDS_RESPONSE
+  UNDER_REVIEW
+  WON
+  LOST
+  WARNING_CLOSED
+  CLOSED
+}
+
+model StripeDispute {
+  id                  String              @id @default(cuid())
+  stripeDisputeId     String              @unique
+  stripeChargeId      String
+
+  /// Cross-service reference. No Prisma relation to Main Backend.
+  paymentId           String?
+
+  /// Cross-service reference to a business-domain DisputeCase. No Prisma relation.
+  disputeCaseId       String?
+
+  amountMinor         BigInt
+  currency            String              @default("AED")
+  reason              String
+  status              StripeDisputeStatus @default(NEEDS_RESPONSE)
+  evidenceDueBy       DateTime?
+  evidenceSubmittedAt DateTime?
+  outcome             String?
+  closedAt            DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@index([paymentId])
+  @@index([status])
+  @@map("stripe_disputes")
+}
+

@@ -1,0 +1,47 @@
+enum NotificationType {
+  NEW_QUESTION_FOR_SELLER
+  ANSWER_APPROVED
+  ANSWER_REJECTED
+  ANSWER_CLARIFICATION_REQUESTED
+  QUESTION_ANSWERED
+  LISTING_SUBMITTED
+  LISTING_APPROVED
+  LISTING_REJECTED
+  AUCTION_STARTED
+  BID_RECEIVED
+  OUTBID
+  AUCTION_WON
+  PAYMENT_REQUIRED
+  PAYMENT_SUCCESS
+  ORDER_SHIPPED
+  PAYOUT_RELEASED
+  SELLER_APPLICATION_SUBMITTED
+  SELLER_APPLICATION_APPROVED
+  SELLER_APPLICATION_REJECTED
+  SELLER_APPLICATION_RESUBMITTED
+  SELLER_APPLICATION_SUSPENDED
+}
+
+model Notification {
+  id            String           @id @default(cuid())
+  userId        String?
+  user          User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipientId   String?
+  recipientRole String?
+  listingId     String?
+  listing       Listing?         @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  type          NotificationType
+  title         String
+  message       String
+  data          Json?
+  isRead        Boolean          @default(false)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([userId, isRead])
+  @@index([recipientId])
+  @@index([recipientRole])
+  @@index([isRead])
+  @@index([createdAt])
+  @@index([listingId])
+}

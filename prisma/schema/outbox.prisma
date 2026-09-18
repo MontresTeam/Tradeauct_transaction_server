@@ -1,0 +1,34 @@
+// ---------------------------------------------------------------------------
+// Outbox — transactional event relay for the Transaction Server.
+//
+// Events are written in the same database transaction as the state change they
+// describe (e.g., Payment → PAID), then an async worker relays them to Redis
+// for consumption by the Main Backend. This makes the money write and the
+// event publish atomic without a distributed transaction.
+//
+// OutboxEvent  — owned by the Transaction Server (the event producer).
+// ProcessedEvent — owned by the CONSUMER. The Main Backend writes this to
+//                  deduplicate incoming events. It is NOT owned here.
+//
+// Both models exist here for the Prisma client used by the Transaction Server;
+// the Main Backend's own Prisma schema must also include ProcessedEvent.
+// ---------------------------------------------------------------------------
+
+/// Events written in the same transaction as the state change they describe,
+/// then relayed to the main server. This is what makes the money write and the
+/// event publish atomic without a distributed transaction.
+model OutboxEvent {
+  id          String    @id @default(cuid())
+  eventType   String
+  payload     Json
+  traceId     String?
+  attempts    Int       @default(0)
+  lastError   String?
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([publishedAt, createdAt])
+  @@index([eventType])
+  @@map("outbox_events")
+}
+

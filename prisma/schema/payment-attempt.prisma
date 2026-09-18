@@ -1,0 +1,37 @@
+// ---------------------------------------------------------------------------
+// PaymentAttempt — one row per charge attempt against a Payment.
+//
+// Payment.listingId is unique so without this table there is no attempt
+// history at all. Owned by the Transaction Server.
+// ---------------------------------------------------------------------------
+
+enum PaymentAttemptStatus {
+  PENDING
+  REQUIRES_ACTION
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+/// One row per charge attempt against a Payment. Payment.listingId is unique,
+/// so without this there is no attempt history at all.
+model PaymentAttempt {
+  id                    String               @id @default(cuid())
+  paymentId             String
+  attemptNo             Int
+  stripePaymentIntentId String?
+  status                PaymentAttemptStatus @default(PENDING)
+  amountMinor           BigInt
+  currency              String               @default("AED")
+  offSession            Boolean              @default(false)
+  failureCode           String?
+  failureMessage        String?
+  idempotencyKey        String               @unique
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  @@unique([paymentId, attemptNo])
+  @@index([paymentId])
+  @@index([stripePaymentIntentId])
+  @@map("payment_attempts")
+}

@@ -1,0 +1,237 @@
+enum ShippingCoverage {
+  UAE_ONLY
+  GCC
+  WORLDWIDE
+}
+
+enum ListingStatus {
+  DRAFT
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  ACTIVE
+  SUSPENDED
+  AWAITING_PAYMENT  // Winner selected, payment not yet received
+  SOLD              // Payment confirmed (future: set by payment webhook)
+  COMPLETED         // Paid + shipped (future: set by shipment completion)
+  EXPIRED
+  DELETED
+}
+
+enum SaleType {
+  BUY_NOW
+  AUCTION
+  BUY_NOW_WITH_OFFER
+}
+
+enum ShippingPayer {
+  BUYER
+  SELLER
+}
+
+enum OfferSetting {
+  AUTO_ACCEPT
+  MANUAL_REVIEW
+}
+
+enum ConditionStatus {
+  UNWORN
+  LIKE_NEW
+  VERY_GOOD
+  GOOD
+  FAIR
+  POOR
+}
+
+enum WorkingConditionStatus {
+  RUNNING
+  NOT_RUNNING
+  NEEDS_SERVICE
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  DOCUMENT
+}
+
+enum ListingOwnerType {
+  TRADEAUCT
+  EXTERNAL_SELLER
+}
+
+model Listing {
+  id                String          @id @default(cuid())
+  // Ownership & Consignment
+  ownerType         ListingOwnerType @default(TRADEAUCT)
+  sellerId          String?
+  seller            Seller?         @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  createdByAdmin    Boolean         @default(false)
+
+  // TradeAuct Inventory Accounting
+  costOfGoods               Decimal?           @db.Decimal(12, 2)
+  acquisitionDate           DateTime?
+  additionalDirectCost      Decimal?           @db.Decimal(12, 2)
+  buyerPremiumOverrideRate  Decimal?           @db.Decimal(5, 2)
+
+  masterReferenceId String?
+  masterReference   WatchReference? @relation(fields: [masterReferenceId], references: [id], onDelete: SetNull)
+  sourceProductId   String?         @unique
+  sourceProduct     Product?        @relation(fields: [sourceProductId], references: [id], onDelete: SetNull)
+
+  categoryId        String?
+  category          Category?       @relation("ListingCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategoryId     String?
+  subcategory       Category?       @relation("ListingSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
+
+  title      String
+  shortDesc  String?
+  fullDesc   String
+  price      Float
+  currency   String        @default("AED")
+  saleType   SaleType
+  status     ListingStatus @default(DRAFT)
+  viewsCount Int           @default(0)
+
+  // Listing Review & Approval / Rejection fields
+  rejectionReason String?
+  reviewedAt      DateTime?
+  reviewedById    String?
+  submittedAt     DateTime?
+
+  shippingCoverage       ShippingCoverage @default(WORLDWIDE)
+  estimatedWeightLbs     Float?
+  estimatedWeightOz      Float?
+  estimatedLength        Float?
+  estimatedWidth         Float?
+  estimatedHeight        Float?
+  isIrregularPackage     Boolean          @default(false)
+
+  aiSuggested            Boolean          @default(false)
+  sellerConfirmed        Boolean          @default(false)
+  confirmedAt            DateTime?
+  confirmedById          String?
+  sellerModified         Boolean          @default(false)
+  aiConfidence           Float?
+  source                 String?
+  sourceItemId           String?
+  sourceRetrievedAt      DateTime?
+
+  modelDescription       String?
+  conditionDescription   String?
+
+  shippingPayer     ShippingPayer @default(BUYER)
+  combineShipping   Boolean       @default(false)
+  inspectionService Boolean       @default(false)
+  servicingOption   Boolean       @default(false)
+  quantity          Int           @default(1)
+  scheduledStart    DateTime?
+
+  offerSetting           OfferSetting?
+  autoAcceptMinimumPrice Float?
+
+  createdById   String?
+  createdByRole String? @default("SELLER")
+
+  // Authoritative Fee Snapshot
+  feeRuleType                 String?   @map("fee_rule_type")
+  sellerFeePercentSnapshot    Float?    @map("seller_fee_percent_snapshot")
+  buyerPremiumPercentSnapshot Float?    @map("buyer_premium_percent_snapshot")
+  minimumStartingBidSnapshot  Float?    @map("minimum_starting_bid_snapshot")
+  feeConfigurationVersion     String?   @map("fee_configuration_version")
+  feeSnapshotCreatedAt        DateTime? @map("fee_snapshot_created_at")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  specification      ListingSpecification?
+  componentCondition ComponentCondition?
+  scopeOfDelivery    ScopeOfDelivery?
+  media              ListingMedia[]
+  auction            Auction?
+  offers             Offer[]
+  payment            Payment?
+  wishlists          Wishlist[]
+  fulfillmentOrder   FulfillmentOrder?
+  questions          ProductQuestion[]
+  attributeValues    ListingAttributeValue[]
+  storageItems       StorageItem[]
+  basicCheckups      BasicCheckup[]
+  notifications      Notification[]
+
+  @@index([sellerId])
+  @@index([masterReferenceId])
+  @@index([categoryId])
+  @@index([subcategoryId])
+  @@index([status])
+  @@index([sourceProductId])
+}
+
+model ListingSpecification {
+  id                     String                 @id @default(cuid())
+  listingId              String                 @unique
+  listing                Listing                @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  serialNumber           String?
+  productionYear         Int?
+  serviceHistory         String?
+  workingCondition       WorkingConditionStatus @default(RUNNING)
+  testing                String?
+  replacementParts       Boolean                @default(false)
+  replacementPartsDetail String?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+}
+
+model ComponentCondition {
+  id        String          @id @default(cuid())
+  listingId String          @unique
+  listing   Listing         @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  case      ConditionStatus
+  dial      ConditionStatus
+  bezel     ConditionStatus
+  crystal   ConditionStatus
+  caseBack  ConditionStatus
+  bracelet  ConditionStatus
+  buckle    ConditionStatus
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+}
+
+model ScopeOfDelivery {
+  id              String   @id @default(cuid())
+  listingId       String   @unique
+  listing         Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  originalBox     Boolean  @default(false)
+  warrantyCard    Boolean  @default(false)
+  manuals         Boolean  @default(false)
+  extraLinks      Boolean  @default(false)
+  servicePapers   Boolean  @default(false)
+  receipt         Boolean  @default(false)
+  certificate     Boolean  @default(false)
+  additionalItems String?
+  boxType                 String?   @default("No box")
+  papersType              String?   @default("No papers")
+  includedAccessories     Json?
+  aiAccessoriesSuggestions Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model ListingMedia {
+  id           String    @id @default(cuid())
+  listingId    String
+  listing      Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  url          String
+  thumbnailUrl String?
+  mediaType    MediaType @default(IMAGE)
+  docType      String?
+  mimeType     String?
+  fileSize     Int?
+  order        Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([listingId])
+  @@index([listingId, order])
+}

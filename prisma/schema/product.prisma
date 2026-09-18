@@ -1,0 +1,165 @@
+model Product {
+  id                String          @id @default(cuid())
+  // Ownership & Consignment
+  ownerType         ListingOwnerType @default(TRADEAUCT)
+  sellerId          String?
+  seller            Seller?         @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  createdByAdmin    Boolean         @default(false)
+
+  // TradeAuct Inventory Accounting
+  costOfGoods               Decimal?           @db.Decimal(12, 2)
+  acquisitionDate           DateTime?
+  additionalDirectCost      Decimal?           @db.Decimal(12, 2)
+  buyerPremiumOverrideRate  Decimal?           @db.Decimal(5, 2)
+
+  masterReferenceId String?
+  masterReference   WatchReference? @relation(fields: [masterReferenceId], references: [id], onDelete: SetNull)
+
+  categoryId        String?
+  category          Category?       @relation("ProductCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategoryId     String?
+  subcategory       Category?       @relation("ProductSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
+
+  title      String
+  shortDesc  String?
+  fullDesc   String
+  price      Float
+  currency   String        @default("AED")
+  saleType   SaleType
+  status     ListingStatus @default(DRAFT)
+  viewsCount Int           @default(0)
+
+  shippingCoverage       ShippingCoverage @default(WORLDWIDE)
+  estimatedWeightLbs     Float?
+  estimatedWeightOz      Float?
+  estimatedLength        Float?
+  estimatedWidth         Float?
+  estimatedHeight        Float?
+  isIrregularPackage     Boolean          @default(false)
+
+  aiSuggested            Boolean          @default(false)
+  sellerConfirmed        Boolean          @default(false)
+  confirmedAt            DateTime?
+  confirmedById          String?
+  sellerModified         Boolean          @default(false)
+  aiConfidence           Float?
+  source                 String?
+  sourceItemId           String?
+  sourceRetrievedAt      DateTime?
+
+  modelDescription       String?
+  conditionDescription   String?
+
+  shippingPayer     ShippingPayer @default(BUYER)
+  combineShipping   Boolean       @default(false)
+  inspectionService Boolean       @default(false)
+  servicingOption   Boolean       @default(false)
+  quantity          Int           @default(1)
+  scheduledStart    DateTime?
+
+  offerSetting           OfferSetting?
+  autoAcceptMinimumPrice Float?
+
+  createdById   String?
+  createdByRole String? @default("ADMIN")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  specification      ProductSpecification?
+  componentCondition ProductComponentCondition?
+  scopeOfDelivery    ProductScopeOfDelivery?
+  media              ProductMedia[]
+  attributeValues    ProductAttributeValue[]
+  copiedListing      Listing?
+
+  @@index([sellerId])
+  @@index([masterReferenceId])
+  @@index([categoryId])
+  @@index([subcategoryId])
+  @@index([status])
+}
+
+model ProductSpecification {
+  id                     String                 @id @default(cuid())
+  productId              String                 @unique
+  product                Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
+  serialNumber           String?
+  productionYear         Int?
+  serviceHistory         String?
+  workingCondition       WorkingConditionStatus @default(RUNNING)
+  testing                String?
+  replacementParts       Boolean                @default(false)
+  replacementPartsDetail String?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+}
+
+model ProductComponentCondition {
+  id        String          @id @default(cuid())
+  productId String          @unique
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  case      ConditionStatus
+  dial      ConditionStatus
+  bezel     ConditionStatus
+  crystal   ConditionStatus
+  caseBack  ConditionStatus
+  bracelet  ConditionStatus
+  buckle    ConditionStatus
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+}
+
+model ProductScopeOfDelivery {
+  id              String   @id @default(cuid())
+  productId       String   @unique
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  originalBox     Boolean  @default(false)
+  warrantyCard    Boolean  @default(false)
+  manuals         Boolean  @default(false)
+  extraLinks      Boolean  @default(false)
+  servicePapers   Boolean  @default(false)
+  receipt         Boolean  @default(false)
+  certificate     Boolean  @default(false)
+  additionalItems String?
+  boxType                 String?   @default("No box")
+  papersType              String?   @default("No papers")
+  includedAccessories     Json?
+  aiAccessoriesSuggestions Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model ProductMedia {
+  id           String    @id @default(cuid())
+  productId    String
+  product      Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url          String
+  thumbnailUrl String?
+  mediaType    MediaType @default(IMAGE)
+  docType      String?
+  mimeType     String?
+  fileSize     Int?
+  order        Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([productId])
+  @@index([productId, order])
+}
+
+model ProductAttributeValue {
+  id              String    @id @default(cuid())
+  productId       String
+  product         Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  attributeId     String
+  attribute       Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  value           String?
+  structuredValue Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([productId, attributeId])
+  @@index([productId])
+  @@index([attributeId])
+}

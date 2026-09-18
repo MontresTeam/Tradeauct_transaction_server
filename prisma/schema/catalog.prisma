@@ -1,0 +1,226 @@
+model Brand {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  description     String?
+  countryId       String?
+  country         Country?         @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  collections     Collection[]
+  watchReferences WatchReference[]
+
+  @@index([name])
+}
+
+model Collection {
+  id              String           @id @default(cuid())
+  brandId         String
+  brand           Brand            @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  name            String
+  slug            String
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+
+  @@unique([brandId, slug])
+}
+
+model WatchReference {
+  id              String     @id @default(cuid())
+  brandId         String
+  brand           Brand      @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  collectionId    String
+  collection      Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  referenceNumber String
+
+  movementId      String?
+  movement        Movement?      @relation(fields: [movementId], references: [id], onDelete: SetNull)
+  caseMaterialId  String?
+  caseMaterial    CaseMaterial?  @relation(fields: [caseMaterialId], references: [id], onDelete: SetNull)
+  caseShape       String?
+  caseSizeMm      Float?
+  caseHeightMm    Float?
+  strapMaterialId String?
+  strapMaterial   StrapMaterial? @relation(fields: [strapMaterialId], references: [id], onDelete: SetNull)
+  dialColorId     String?
+  dialColor       DialColor?     @relation(fields: [dialColorId], references: [id], onDelete: SetNull)
+  crystalId       String?
+  crystal         Crystal?       @relation(fields: [crystalId], references: [id], onDelete: SetNull)
+  watchTypeId     String?
+  watchType       WatchType?     @relation(fields: [watchTypeId], references: [id], onDelete: SetNull)
+  genderId        String?
+  gender          Gender?        @relation(fields: [genderId], references: [id], onDelete: SetNull)
+  watchStyleId    String?
+  watchStyle      WatchStyle?    @relation(fields: [watchStyleId], references: [id], onDelete: SetNull)
+  strapColorId    String?
+  strapColor      StrapColor?    @relation(fields: [strapColorId], references: [id], onDelete: SetNull)
+  strapSizeMm     Float?
+  dialNumeralsId  String?
+  dialNumerals    DialNumeral?   @relation(fields: [dialNumeralsId], references: [id], onDelete: SetNull)
+
+  isActive  Boolean @default(true)
+  imageUrl  String?
+  image2Url String?
+
+  createdById   String?
+  createdByRole String? @default("SYSTEM")
+  updatedById   String?
+  updatedByRole String? @default("SYSTEM")
+
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+  listings  Listing[]
+  products  Product[]
+  audits    WatchReferenceAudit[]
+
+  @@unique([brandId, referenceNumber])
+  @@index([referenceNumber])
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  SEED_IMPORT
+}
+
+model WatchReferenceAudit {
+  id String @id @default(cuid())
+
+  watchReferenceId String?
+  watchReference   WatchReference? @relation(fields: [watchReferenceId], references: [id], onDelete: SetNull)
+
+  action AuditAction
+
+  oldValues Json?
+  newValues Json?
+
+  performedById   String?
+  performedByRole String?
+
+  source String?
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  @@index([watchReferenceId])
+}
+
+model Movement {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  description     String?
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}
+
+model CaseMaterial {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}
+
+model StrapMaterial {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}
+
+model DialColor {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}
+
+model Crystal {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}
+
+model WatchType {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}
+
+model Gender {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}
+
+model Country {
+  id                  String          @id @default(cuid())
+  name                String          @unique
+  code                String          @unique // ISO Alpha-2 e.g. "CH", "US", "AE", "ZA", "SA"
+  flag                String?
+  defaultLanguageCode String          @default("en")
+  defaultCurrencyCode String          @default("AED")
+  isActive            Boolean         @default(true)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  brands              Brand[]
+  sellerAddresses     SellerAddress[]
+  buyerAddresses      BuyerAddress[]
+}
+
+model WatchStyle {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}
+
+model StrapColor {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}
+
+model DialNumeral {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  slug            String           @unique
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  watchReferences WatchReference[]
+}

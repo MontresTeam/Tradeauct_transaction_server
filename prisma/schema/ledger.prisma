@@ -1,0 +1,78 @@
+// ---------------------------------------------------------------------------
+// Ledger — double-entry bookkeeping for all money movements.
+//
+// These tables are APPEND-ONLY. Even the transaction server role may not
+// UPDATE or DELETE ledger rows — a correction is always a new compensating
+// entry. This is enforced by the PostgreSQL grants in prisma/grants/roles.sql.
+//
+// Both LedgerTransaction and LedgerEntry are owned by the Transaction Server.
+// The Main Backend must never INSERT, UPDATE or DELETE any ledger row.
+// ---------------------------------------------------------------------------
+
+enum LedgerTransactionKind {
+  CHARGE
+  REFUND
+  FEE
+  PAYOUT
+  ADJUSTMENT
+  DISPUTE
+}
+
+enum LedgerAccount {
+  BUYER_RECEIVABLE
+  STRIPE_CASH
+  PLATFORM_FEE_REVENUE
+  VAT_PAYABLE
+  SHIPPING_REVENUE
+  SELLER_PAYABLE
+  STRIPE_FEES
+  REFUNDS
+  DISPUTES_RESERVE
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+/// A balanced set of ledger entries. Append-only — never update or delete.
+model LedgerTransaction {
+  id            String                @id @default(cuid())
+  kind          LedgerTransactionKind
+  referenceType String
+  referenceId   String
+  currency      String                @default("AED")
+  description   String?
+  traceId       String?
+  occurredAt    DateTime              @default(now())
+  createdAt     DateTime              @default(now())
+  entries       LedgerEntry[]
+
+  @@index([referenceType, referenceId])
+  @@index([kind, occurredAt])
+  @@map("ledger_transactions")
+}
+
+/// Double-entry line. Per transaction, debits must equal credits. Append-only.
+model LedgerEntry {
+  id                  String            @id @default(cuid())
+  ledgerTransactionId String
+  ledgerTransaction   LedgerTransaction @relation(fields: [ledgerTransactionId], references: [id], onDelete: Restrict)
+  account             LedgerAccount
+  direction           LedgerDirection
+  amountMinor         BigInt
+  currency            String            @default("AED")
+
+  /// Cross-service references stored as plain scalars. No Prisma relations.
+  buyerId   String?
+  sellerId  String?
+  paymentId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([ledgerTransactionId])
+  @@index([account, createdAt])
+  @@index([sellerId])
+  @@index([buyerId])
+  @@map("ledger_entries")
+}

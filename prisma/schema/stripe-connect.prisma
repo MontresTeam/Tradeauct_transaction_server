@@ -1,0 +1,65 @@
+// ---------------------------------------------------------------------------
+// Stripe Connect — seller payout infrastructure.
+//
+// ConnectAccount — a Stripe Connect account onboarded for a seller.
+// PayoutTransfer — a Stripe Transfer/Payout instruction to a seller.
+//
+// Both owned by the Transaction Server. The Main Backend reads payout status
+// via the Transaction Server API; it must not write these tables.
+// ---------------------------------------------------------------------------
+
+enum PayoutTransferStatus {
+  PENDING
+  PAID
+  FAILED
+  REVERSED
+}
+
+/// Stripe Connect account for a seller, enabling direct payouts.
+model ConnectAccount {
+  id               String    @id @default(cuid())
+
+  /// Cross-service reference to Main Backend Seller. No Prisma relation.
+  sellerId         String    @unique
+
+  stripeAccountId  String    @unique
+  country          String?
+  defaultCurrency  String?
+  chargesEnabled   Boolean   @default(false)
+  payoutsEnabled   Boolean   @default(false)
+  detailsSubmitted Boolean   @default(false)
+  requirementsDue  Json?
+  disabledReason   String?
+  onboardedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@map("connect_accounts")
+}
+
+/// A Stripe Transfer or Payout instruction to a seller's Connect account.
+model PayoutTransfer {
+  id String @id @default(cuid())
+
+  /// Cross-service reference to Main Backend SellerPayout row ID.
+  sellerPayoutId String
+
+  /// Cross-service reference to Main Backend Seller. No Prisma relation.
+  sellerId String
+
+  stripeTransferId    String?              @unique
+  stripePayoutId      String?
+  amountMinor         BigInt
+  currency            String               @default("AED")
+  status              PayoutTransferStatus @default(PENDING)
+  failureCode         String?
+  failureMessage      String?
+  idempotencyKey      String               @unique
+  ledgerTransactionId String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([sellerPayoutId])
+  @@index([sellerId])
+  @@map("payout_transfers")
+}

@@ -1,0 +1,17 @@
+model EarlyAccess {
+  id             String    @id @default(uuid())
+  name           String
+  email          String
+  phone          String?
+  country        String
+  role           String    @default("buyer")
+  brandInterests String?
+  cohort         Int       @default(1)
+  status         String    @default("NEW")
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([email])
+  @@index([status])
+}

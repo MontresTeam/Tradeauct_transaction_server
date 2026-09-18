@@ -1,0 +1,39 @@
+// ---------------------------------------------------------------------------
+// ServiceAuditLog — immutable audit trail for every financial mutation.
+//
+// Records who did what, from where, to which financial entity. This is the
+// transaction server's own audit log — distinct from the Main Backend's
+// FinancialAuditLog which tracks business-domain events (shipping, settlement).
+//
+// Owned exclusively by the Transaction Server.
+// ---------------------------------------------------------------------------
+
+enum ServiceActorType {
+  USER
+  ADMIN
+  SERVICE
+  SYSTEM
+}
+
+/// Audit trail for every money mutation: who, from where, what changed.
+model ServiceAuditLog {
+  id          String           @id @default(cuid())
+  actorType   ServiceActorType @default(SYSTEM)
+  actorId     String?
+  service     String?
+  action      String
+  entityType  String
+  entityId    String?
+  amountMinor BigInt?
+  currency    String?
+  ip          String?
+  traceId     String?
+  reason      String?
+  before      Json?
+  after       Json?
+  createdAt   DateTime         @default(now())
+
+  @@index([entityType, entityId])
+  @@index([action, createdAt])
+  @@map("service_audit_logs")
+}

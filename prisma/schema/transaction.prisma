@@ -1,0 +1,844 @@
+enum AuctionStatus {
+  PENDING
+  ACTIVE
+  RESERVE_NOT_MET
+  RESERVE_MET
+  ENDED_WITH_WINNER    // Timer hit zero, winner identified
+  AWAITING_PAYMENT     // Winner confirmed, awaiting payment (post-end transparency state)
+  ENDED_NO_BIDS        // No bids placed, listing expired
+  ENDED_RESERVE_NOT_MET // Bids placed but reserve not met
+  CANCELLED
+}
+
+enum OfferStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  WITHDRAWN
+}
+
+enum PaymentRecoveryStatus {
+  NOT_REQUIRED
+  REQUIRED
+  IN_PROGRESS
+  RETRYING
+  RECOVERED
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  PROCESSING
+  PAID
+  FAILED
+  REQUIRES_ACTION
+  REFUNDED
+}
+
+enum PaymentGateway {
+  STRIPE
+  ADYEN
+  BANK_TRANSFER
+}
+
+enum ShipmentStatus {
+  PENDING
+  SHIPPED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  RETURNED
+  EXCEPTION
+}
+
+enum AuctionType {
+  RESERVE
+  NO_RESERVE
+  FROM_ZERO
+}
+
+enum BadgeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum WeeklyAuctionStatus {
+  UPCOMING
+  LIVE
+  COMPLETED
+  CANCELLED
+}
+
+model WeeklyAuctionEvent {
+  id                 String              @id @default(cuid())
+  eventNumber        Int                 @unique @default(autoincrement()) @map("event_number")
+  title              String
+  startAt            DateTime            @map("start_at")
+  closingStartAt     DateTime            @map("closing_start_at")
+  cutOffAt           DateTime            @map("cut_off_at")
+  lotIntervalMinutes Int                 @default(1) @map("lot_interval_minutes")
+  status             WeeklyAuctionStatus @default(UPCOMING)
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  auctions           Auction[]
+
+  @@index([status])
+  @@index([closingStartAt])
+  @@map("weekly_auction_events")
+}
+
+model Auction {
+  weeklyAuctionEventId String?             @map("weekly_auction_event_id")
+  weeklyAuctionEvent   WeeklyAuctionEvent? @relation(fields: [weeklyAuctionEventId], references: [id], onDelete: SetNull)
+  lotNumber            Int?                @map("lot_number")
+  id               String                @id @default(cuid())
+  listingId        String                @unique @map("product_id")
+  listing          Listing               @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  sellerId         String?               @map("seller_id")
+  startingPrice    Float                 @map("starting_bid")
+  reservePrice     Float?                @map("reserve_price")
+  buyNowPrice      Float?                @map("buy_now_price")
+  currentBid       Float?                @map("current_bid")
+  startAt          DateTime              @map("auction_start_time")
+  endAt            DateTime              @map("auction_end_time")
+  status           AuctionStatus         @default(PENDING)
+  auctionType      AuctionType           @default(RESERVE) @map("auction_type")
+  reserveFee       Float?                @default(0) @map("reserve_fee")
+  reserveFeeStatus String?               @default("FREE") @map("reserve_fee_status")
+
+  // Authoritative Fee Snapshot
+  feeRuleType                 String?   @map("fee_rule_type")
+  sellerFeePercentSnapshot    Float?    @map("seller_fee_percent_snapshot")
+  buyerPremiumPercentSnapshot Float?    @map("buyer_premium_percent_snapshot")
+  minimumStartingBidSnapshot  Float?    @map("minimum_starting_bid_snapshot")
+  feeConfigurationVersion     String?   @map("fee_configuration_version")
+  feeSnapshotCreatedAt        DateTime? @map("fee_snapshot_created_at")
+
+  // Cancellation metadata
+  cancelledBy                 String?   @map("cancelled_by") // "SELLER", "ADMIN", "SYSTEM"
+  cancellationReason          String?   @map("cancellation_reason")
+  cancellationInternalNote    String?   @map("cancellation_internal_note")
+  cancellationPrivilegeUsed   Boolean   @default(false) @map("cancellation_privilege_used")
+  cancelledAt                 DateTime? @map("cancelled_at")
+  cancelledById               String?   @map("cancelled_by_id")
+
+  winnerId         String?               @map("winner_id")
+  winner           Buyer?                @relation(fields: [winnerId], references: [id], onDelete: SetNull)
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+  bids             Bid[]
+  badges           AuctionBadgeMapping[]
+
+  @@index([status])
+  @@index([endAt])
+  @@index([auctionType])
+  @@index([weeklyAuctionEventId])
+  @@map("auctions")
+}
+
+model AuctionSetting {
+  id           String   @id @default(cuid())
+  settingName  String   @unique @map("setting_name")
+  settingValue String   @map("setting_value")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("auction_settings")
+}
+
+model AuctionBadge {
+  id           String                @id @default(cuid())
+  name         String                @unique
+  description  String
+  icon         String
+  displayOrder Int                   @default(0) @map("display_order")
+  status       BadgeStatus           @default(ACTIVE)
+  createdAt    DateTime              @default(now()) @map("created_at")
+  updatedAt    DateTime              @updatedAt @map("updated_at")
+  mappings     AuctionBadgeMapping[]
+
+  @@map("auction_badges")
+}
+
+model AuctionBadgeMapping {
+  id        String       @id @default(cuid())
+  auctionId String       @map("auction_id")
+  auction   Auction      @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  badgeId   String       @map("badge_id")
+  badge     AuctionBadge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  @@unique([auctionId, badgeId])
+  @@index([auctionId])
+  @@index([badgeId])
+  @@map("auction_badge_mapping")
+}
+
+model Bid {
+  id        String   @id @default(cuid())
+  auctionId String   @map("auction_id")
+  auction   Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  bidderId  String   @map("bidder_id")
+  bidder    Buyer    @relation(fields: [bidderId], references: [id], onDelete: Cascade)
+  amount    Float    @map("bid_amount")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([auctionId, amount(sort: Desc)])
+  @@index([bidderId])
+  @@map("auction_bids")
+}
+
+model AuctionIncrementRule {
+  id             String   @id @default(cuid())
+  minimumAmount  Float    @map("minimum_amount")
+  maximumAmount  Float?   @map("maximum_amount")
+  incrementValue Float    @map("increment_value")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([minimumAmount])
+  @@map("auction_increment_rules")
+}
+
+model Offer {
+  id        String      @id @default(cuid())
+  listingId String
+  listing   Listing     @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  buyerId   String
+  buyer     Buyer       @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  amount    Float
+  currency  String      @default("AED")
+  message   String?
+  status    OfferStatus @default(PENDING)
+  expiresAt DateTime
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([listingId, status])
+  @@index([buyerId])
+}
+
+model Payment {
+  id                    String            @id @default(cuid())
+  listingId             String            @unique
+  listing               Listing           @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  auctionId             String?
+  buyerId               String
+  buyer                 Buyer             @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId              String?
+  stripeCustomerId      String?
+  stripePaymentMethodId String?
+  amount                Float
+  amountMinor           BigInt?
+  currency              String            @default("AED")
+  currencyExponent      Int               @default(2)
+  gateway               PaymentGateway    @default(STRIPE)
+  gatewayTransactionId  String?           @unique
+  stripePaymentIntentId String?           @unique
+  status                PaymentStatus     @default(PENDING)
+  failureReason         String?
+  paymentRecoveryStatus PaymentRecoveryStatus @default(NOT_REQUIRED)
+  recoveryRequiredAt    DateTime?
+  recoveryStartedAt     DateTime?
+  recoveryExpiresAt     DateTime?
+  recoveryAttemptCount  Int                   @default(0)
+  lastRecoveryAttemptAt DateTime?
+  lastFailureCode       String?
+  lastFailureMessage    String?
+  recoveryReason        String?
+  isTechnicalFailure    Boolean               @default(false)
+  paidAt                DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  shipment              Shipment?
+  fulfillmentOrder      FulfillmentOrder?
+
+  @@index([buyerId])
+  @@index([auctionId])
+}
+
+model SavedPaymentMethod {
+  id                    String   @id @default(cuid())
+  buyerId               String
+  buyer                 Buyer    @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  stripeCustomerId      String
+  stripePaymentMethodId String   @unique
+  brand                 String
+  last4                 String
+  expMonth              Int?
+  expYear               Int?
+  status                String   @default("active")
+  isDefault             Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([buyerId])
+  @@index([stripeCustomerId])
+}
+
+model Shipment {
+  id             String         @id @default(cuid())
+  paymentId      String         @unique
+  payment        Payment        @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  courier        String // e.g. "DHL", "FedEx"
+  trackingNumber String?        @unique
+  status         ShipmentStatus @default(PENDING)
+  deliveredAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+enum FulfillmentStatus {
+  PAYMENT_COMPLETED
+  PICKUP_REQUESTED
+  PICKUP_SCHEDULED
+  COURIER_ASSIGNED
+  COLLECTED
+  IN_TRANSIT_TO_TRADEAUCT
+  RECEIVED_BY_TRADEAUCT
+  INSPECTION_IN_PROGRESS
+  INSPECTION_COMPLETED
+  READY_FOR_SHIPMENT
+  OUTBOUND_SHIPMENT_CREATED
+  SHIPPED_TO_BUYER
+  OUT_FOR_DELIVERY
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+}
+
+enum PickupStatus {
+  PENDING
+  SCHEDULED
+  COURIER_ASSIGNED
+  PACKAGE_PREPARED
+  HANDED_OVER
+  COLLECTED
+  DELIVERED_TO_HUB
+  FAILED
+  CANCELLED
+}
+
+enum InspectionStatus {
+  NOT_REQUIRED
+  PENDING
+  IN_PROGRESS
+  PASSED
+  FAILED
+  CONDITION_DISCREPANCY
+}
+
+enum ShippingPartnerType {
+  LOCAL_COURIER
+  DHL
+  ARAMEX
+  FEDEX
+  UPS
+  SPECIALIZED_SECURE
+}
+
+enum PartnerIntegrationStatus {
+  MANUAL_V1
+  API_READY
+  ACTIVE_INTEGRATED
+  INACTIVE
+}
+
+enum FulfillmentActorRole {
+  BUYER
+  SELLER
+  ADMIN
+  SYSTEM
+}
+
+model FulfillmentOrder {
+  id                String                   @id @default(cuid())
+  orderNumber       String                   @unique
+  paymentId         String?                  @unique
+  payment           Payment?                 @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  listingId         String                   @unique
+  listing           Listing                  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  buyerId           String
+  buyer             Buyer                    @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId          String
+  seller            Seller                   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  purchaseType      SaleType                 @default(AUCTION)
+  purchasePrice     Float
+  buyerFee          Float                    @default(0)
+  shippingCost      Float                    @default(0)
+  storageFee        Float                    @default(0)
+  taxAmount         Float                    @default(0)
+  totalAmount       Float
+  currency          String                   @default("AED")
+  storageSelected   Boolean                  @default(false)
+
+  fulfillmentStatus FulfillmentStatus        @default(PAYMENT_COMPLETED)
+  inspectionStatus  InspectionStatus         @default(NOT_REQUIRED)
+
+  deliveryAddress   Json
+  deliveryCountry   String                   @default("United Arab Emirates")
+
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  pickupRequest     PickupRequest?
+  outboundShipment  OutboundShipment?
+  inspectionRecord  InspectionRecord?
+  disputeCase       DisputeCase?
+  settlement        SellerSettlement?
+  statusHistory     FulfillmentStatusHistory[]
+  storageItem       StorageItem?
+  basicCheckup      BasicCheckup?
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([fulfillmentStatus])
+  @@index([orderNumber])
+}
+
+model FulfillmentStatusHistory {
+  id                 String               @id @default(cuid())
+  fulfillmentOrderId String
+  fulfillmentOrder   FulfillmentOrder     @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+  previousStatus     FulfillmentStatus?
+  newStatus          FulfillmentStatus
+  changedById        String?
+  changedByRole      FulfillmentActorRole @default(SYSTEM)
+  notes              String?
+  metadata           Json?
+  createdAt          DateTime             @default(now())
+
+  @@index([fulfillmentOrderId])
+}
+
+model PickupRequest {
+  id                   String           @id @default(cuid())
+  fulfillmentOrderId   String           @unique
+  fulfillmentOrder     FulfillmentOrder @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+  sellerId             String
+  seller               Seller           @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  status               PickupStatus     @default(PENDING)
+  scheduledDate        DateTime?
+  timeSlot             String?
+
+  assignedCourier      String?
+  partnerId            String?
+  partner              ShippingPartner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  pickupTrackingNumber String?
+  shippingLabelUrl     String?
+
+  pickupAddress        Json
+  packageWeightKg      Float?
+  packageDimensionsCm  String?
+
+  sellerPreparedAt     DateTime?
+  handedOverAt         DateTime?
+  collectedAt          DateTime?
+  receivedAtHubAt      DateTime?
+
+  notes                String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  @@index([sellerId])
+  @@index([status])
+}
+
+model OutboundShipment {
+  id                 String           @id @default(cuid())
+  fulfillmentOrderId String           @unique
+  fulfillmentOrder   FulfillmentOrder @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+
+  partnerId          String?
+  partner            ShippingPartner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  courierName        String
+  serviceType        String           @default("EXPRESS_INSURED")
+  trackingNumber     String?          @unique
+  shippingLabelUrl   String?
+
+  shippedAt          DateTime?
+  estimatedDelivery  DateTime?
+  actualDelivery     DateTime?
+
+  trackingEvents     Json?
+  notes              String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+}
+
+model InspectionRecord {
+  id                   String           @id @default(cuid())
+  fulfillmentOrderId   String           @unique
+  fulfillmentOrder     FulfillmentOrder @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+
+  providerName         String
+  inspectorName        String?
+  inspectionDate       DateTime         @default(now())
+  status               InspectionStatus @default(PENDING)
+  overallResult        String?
+
+  serialNumberVerified String?
+  movementCondition    String?
+  caseBackCondition    String?
+  reportSummary        String?
+  detailedReportUrl    String?
+
+  photos               Json?
+  movementPhotos       Json?
+  caseBackPhotos       Json?
+
+  notes                String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+}
+
+model ShippingPartner {
+  id                 String                   @id @default(cuid())
+  name               String                   @unique
+  code               String                   @unique
+  partnerType        ShippingPartnerType      @default(LOCAL_COURIER)
+  country            String                   @default("United Arab Emirates")
+  supportedCountries Json
+  supportedZones     Json?
+  isActive           Boolean                  @default(true)
+  apiStatus          PartnerIntegrationStatus @default(MANUAL_V1)
+  serviceType        String                   @default("INSURED_SECURE")
+  contactPhone       String?
+  contactEmail       String?
+  notes              String?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  pickupRequests     PickupRequest[]
+  outboundShipments  OutboundShipment[]
+}
+
+model ShippingZone {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  code      String   @unique
+  baseRate  Float
+  currency  String   @default("AED")
+  countries Json
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum DisputeReason {
+  ITEM_NOT_AS_DESCRIBED
+  MISSING_ITEM_OR_ACCESSORY
+  CONDITION_ISSUE
+  AUTHENTICITY_CONCERN
+  FUNCTIONAL_MECHANICAL_ISSUE
+  SHIPPING_DAMAGE
+  WRONG_ITEM
+  RETURN_REFUND_ISSUE
+  OTHER
+  // Explicit category aliases for TradeAuct dispute guidelines
+  COUNTERFEIT_AUTHENTICITY
+  SIGNIFICANTLY_NOT_AS_DESCRIBED
+  UNDISCLOSED_DEFECT
+  MISSING_ACCESSORIES
+  BUYER_REMORSE
+}
+
+enum DisputeStatus {
+  CASE_OPENED
+  EVIDENCE_REQUIRED
+  UNDER_REVIEW
+  RESOLVED
+}
+
+enum DisputeResolutionOutcome {
+  RELEASE_FUNDS_TO_SELLER
+  FULL_REFUND_TO_BUYER
+  PARTIAL_REFUND_ADJUSTMENT
+  RETURN_ITEM_BEFORE_REFUND
+  CLAIM_REJECTED_CLOSED
+}
+
+enum SettlementStatus {
+  PENDING
+  ON_HOLD
+  DISPUTE_OPEN
+  RETURN_IN_PROGRESS
+  ELIGIBLE
+  AVAILABLE_FOR_PAYOUT
+  PAID
+  CANCELLED
+}
+
+enum PayoutStatus {
+  UNPAID
+  REQUESTED
+  APPROVED
+  PROCESSING
+  PAID
+  REJECTED
+}
+
+enum WalletTransactionType {
+  SETTLEMENT_CREDIT
+  WITHDRAWAL
+  ADJUSTMENT_DEBIT
+  ADJUSTMENT_CREDIT
+  REFUND_DEDUCTION
+}
+
+model DisputeCase {
+  id                 String                   @id @default(cuid())
+  caseNumber         String                   @unique
+  fulfillmentOrderId String                   @unique
+  fulfillmentOrder   FulfillmentOrder         @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+
+  reason             DisputeReason            @default(ITEM_NOT_AS_DESCRIBED)
+  reasonDetails      String?
+  status             DisputeStatus            @default(CASE_OPENED)
+  resolutionOutcome  DisputeResolutionOutcome?
+
+  openedById         String
+  openedByRole       FulfillmentActorRole     @default(BUYER)
+  claimSummary       String
+  disputedAmount     Float
+  currency           String                   @default("AED")
+
+  recommendedAction  String?
+  responseDeadline   DateTime?
+
+  thirdPartyRequired Boolean                  @default(false)
+  thirdPartyAssessor String?
+  thirdPartyReport   String?
+
+  evidenceList       DisputeEvidence[]
+  timeline           DisputeMilestone[]
+
+  adminNotes         String?
+  resolvedAt         DateTime?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  @@index([status])
+  @@index([fulfillmentOrderId])
+}
+
+model DisputeEvidence {
+  id            String               @id @default(cuid())
+  disputeCaseId String
+  disputeCase   DisputeCase          @relation(fields: [disputeCaseId], references: [id], onDelete: Cascade)
+
+  uploadedById  String
+  uploadedByRole FulfillmentActorRole @default(SELLER)
+  fileType      String               // "IMAGE", "VIDEO", "DOCUMENT", "TEXT"
+  fileUrl       String?
+  fileName      String?
+  fileSizeBytes Int?
+  notes         String?
+
+  createdAt     DateTime             @default(now())
+
+  @@index([disputeCaseId])
+}
+
+model DisputeMilestone {
+  id            String               @id @default(cuid())
+  disputeCaseId String
+  disputeCase   DisputeCase          @relation(fields: [disputeCaseId], references: [id], onDelete: Cascade)
+
+  title         String
+  description   String
+  isCompleted   Boolean              @default(true)
+  performedBy   String?
+  createdAt     DateTime             @default(now())
+
+  @@index([disputeCaseId])
+}
+
+model SellerSettlement {
+  id                   String           @id @default(cuid())
+  settlementNumber     String           @unique
+  fulfillmentOrderId   String           @unique
+  fulfillmentOrder     FulfillmentOrder @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+  sellerId             String
+  seller               Seller           @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  // Dynamic Platform Fee Snapshot (Admin-configured dynamic fee structure)
+  saleAmount           Float
+  currency             String           @default("AED")
+  platformFeeRate      Float            // Effective rate snapshot from dynamic Admin rule (no hard-coded default)
+  platformFeeType      String           @default("PERCENTAGE") // "PERCENTAGE", "FIXED", "TIERED"
+  platformFee          Float            // Calculated platform fee amount
+
+  // Shipping Responsibility Snapshot
+  shippingPayer        ShippingPayer    @default(BUYER) // BUYER or SELLER
+  estimatedShipping    Float            @default(0)
+  actualShipping       Float            @default(0)
+  actualShippingKnown  Boolean          @default(false)
+
+  // Deductions & Adjustments
+  otherDeductions      Float            @default(0)
+  refundAmount         Float            @default(0)
+  adjustmentAmount     Float            @default(0)
+  netProceeds          Float            // Sale Amount - Platform Fee - (Actual Shipping if Seller Pays) - Deductions
+
+  // Status & Lifecycle Timestamps
+  settlementStatus     SettlementStatus @default(PENDING)
+  payoutStatus         PayoutStatus     @default(UNPAID)
+  holdReason           String?
+  holdPlacedById       String?
+  holdPlacedAt         DateTime?
+
+  deliveredAt          DateTime?
+  receiptConfirmedAt   DateTime?
+  autoReceiptAt        DateTime?
+  protectionExpiresAt  DateTime?
+  eligibleAt           DateTime?
+  settledAt            DateTime?
+
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  adjustments          SettlementAdjustment[]
+  auditLogs            FinancialAuditLog[]
+
+  @@index([sellerId])
+  @@index([settlementStatus])
+  @@index([payoutStatus])
+}
+
+model SettlementAdjustment {
+  id                 String           @id @default(cuid())
+  settlementId       String
+  settlement         SellerSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  adminId            String
+  previousNet        Float
+  adjustmentAmount   Float            // Positive or negative adjustment
+  newNet             Float
+  reason             String
+  createdAt          DateTime         @default(now())
+
+  @@index([settlementId])
+}
+
+model SellerWallet {
+  id                 String              @id @default(cuid())
+  sellerId           String              @unique
+  seller             Seller              @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  pendingEarnings    Float               @default(0)
+  availableBalance   Float               @default(0)
+  totalWithdrawn     Float               @default(0)
+  currency           String              @default("AED")
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  transactions       WalletTransaction[]
+  payouts            SellerPayout[]
+
+  @@index([sellerId])
+}
+
+model WalletTransaction {
+  id             String                @id @default(cuid())
+  walletId       String
+  wallet         SellerWallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type           WalletTransactionType
+  amount         Float
+  balanceBefore  Float
+  balanceAfter   Float
+  currency       String                @default("AED")
+  referenceId    String?               // e.g. settlementId, payoutId
+  referenceType  String?               // "SETTLEMENT", "PAYOUT", "ADJUSTMENT"
+  description    String
+  metadata       Json?
+  createdAt      DateTime              @default(now())
+
+  @@index([walletId])
+  @@index([referenceId])
+}
+
+model SellerPayout {
+  id                 String       @id @default(cuid())
+  payoutNumber       String       @unique
+  walletId           String
+  wallet             SellerWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  sellerId           String
+  seller             Seller       @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  amount             Float
+  currency           String       @default("AED")
+  status             PayoutStatus @default(REQUESTED)
+  bankAccountDetails Json?
+  adminNotes         String?
+  processedById      String?
+  processedAt        DateTime?
+  rejectionReason    String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([sellerId])
+  @@index([status])
+}
+
+model FinancialAuditLog {
+  id              String            @id @default(cuid())
+  action          String            // e.g. "SETTLEMENT_CREATED", "ACTUAL_SHIPPING_RECORDED", "HOLD_PLACED", "HOLD_RELEASED", "SETTLEMENT_RELEASED", "PAYOUT_PROCESSED"
+  entityType      String            // "SETTLEMENT", "WALLET", "PAYOUT", "SHIPPING_RATE"
+  entityId        String
+  amount          Float?
+  previousState   Json?
+  newState        Json?
+  reason          String?
+  performedById   String?
+  performedByRole String            @default("SYSTEM") // "SYSTEM", "ADMIN", "SELLER", "BUYER"
+  metadata        Json?
+  settlementId    String?
+  settlement      SellerSettlement? @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+  createdAt       DateTime          @default(now())
+
+  @@index([entityType, entityId])
+  @@index([action])
+}
+
+model CountryShippingRate {
+  id             String   @id @default(cuid())
+  countryCode    String   @unique // e.g. "AE", "SA", "KW", "QA", "OM", "BH", "GB", "US"
+  countryName    String
+  zone           String   @default("GCC") // "DOMESTIC", "GCC", "WORLDWIDE", "EUROPE", etc.
+  shippingMethod String   @default("TradeAuct Insured Express")
+  rate           Float    // Base rate e.g. AED 25, AED 80
+  currency       String   @default("AED")
+  isActive       Boolean  @default(true)
+  estimatedDays  String?  @default("2-4 business days")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([countryCode])
+  @@index([isActive])
+}
+
+model StripeEventLog {
+  id        String   @id @default(cuid())
+  eventId   String   @unique
+  eventType String
+  status    String   @default("PROCESSED")
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([eventId])
+  @@index([eventType])
+  @@map("stripe_event_logs")
+}
+
+model ProcessedEvent {
+  id          String   @id @default(cuid())
+  eventId     String
+  consumer    String
+  processedAt DateTime @default(now())
+
+  @@unique([eventId, consumer])
+  @@map("processed_events")
+}

@@ -1,0 +1,90 @@
+enum QuestionStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  HIDDEN
+  SPAM
+  MERGED
+}
+
+enum AnswerStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+  HIDDEN
+}
+
+model QuestionCategory {
+  id           String            @id @default(cuid())
+  name         String            @unique
+  slug         String            @unique
+  displayOrder Int               @default(0)
+  isActive     Boolean           @default(true)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  questions    ProductQuestion[]
+
+  @@index([isActive])
+}
+
+model ProductQuestion {
+  id                String            @id @default(cuid())
+  listingId         String
+  listing           Listing           @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  buyerId           String
+  buyer             Buyer             @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  categoryId        String
+  category          QuestionCategory  @relation(fields: [categoryId], references: [id])
+  questionText      String
+  status            QuestionStatus    @default(PENDING_APPROVAL)
+  rejectionReason   String?
+  adminNotes        String?
+  isFeatured        Boolean           @default(false)
+  isFaq             Boolean           @default(false)
+  isPinned          Boolean           @default(false)
+  displayOrder      Int               @default(0)
+  helpfulVotesCount Int               @default(0)
+  mergedIntoId      String?
+  mergedInto        ProductQuestion?  @relation("QuestionMerges", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedQuestions   ProductQuestion[] @relation("QuestionMerges")
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  answer            ProductAnswer?
+  votes             QuestionVote[]
+
+  @@index([listingId, status])
+  @@index([buyerId])
+  @@index([categoryId])
+  @@index([status])
+}
+
+model ProductAnswer {
+  id              String          @id @default(cuid())
+  questionId      String          @unique
+  question        ProductQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  sellerId        String
+  seller          Seller          @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  answerText      String
+  status          AnswerStatus    @default(PENDING_APPROVAL)
+  rejectionReason String?
+  adminNotes      String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([sellerId, status])
+  @@index([status])
+}
+
+model QuestionVote {
+  id         String          @id @default(cuid())
+  questionId String
+  question   ProductQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime        @default(now())
+
+  @@unique([questionId, userId])
+  @@index([questionId])
+  @@index([userId])
+}

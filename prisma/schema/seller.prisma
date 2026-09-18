@@ -1,0 +1,355 @@
+enum SellerType {
+  BUSINESS
+  INDIVIDUAL
+  COMPANY_SELLER
+}
+
+enum SellerApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum VerificationStatus {
+  DRAFT
+  IN_PROGRESS
+  PENDING_REVIEW
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  SUSPENDED
+  RE_SUBMITTING
+  RE_SUBMITTED
+}
+
+enum AddressType {
+  BUSINESS
+  WAREHOUSE
+  PICKUP
+  RETURN
+  REGISTERED_OFFICE
+  BRANCH_OFFICE
+}
+
+model Seller {
+  id             String               @id @default(uuid())
+  userId         String               @unique
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sellerType     SellerType
+  approvalStatus SellerApprovalStatus @default(PENDING)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  individualProfile      IndividualProfile?
+  individualVerification IndividualVerification?
+  individualBankAccount  IndividualBankAccount?
+  businessProfile        BusinessProfile?
+  businessVerification   BusinessVerification?
+  businessContact        BusinessContact?
+  businessBankAccount    BusinessBankAccount?
+
+  individualDocuments IndividualDocument[]
+  businessDocuments   BusinessDocument[]
+  kycDraft            KycDraft?
+
+  addresses         SellerAddress[]
+  listings          Listing[]
+  products          Product[]
+  paymentPolicies   PaymentPolicy[]
+  fulfillmentOrders FulfillmentOrder[]
+  storageItems      StorageItem[]
+  basicCheckups     BasicCheckup[]
+  pickupRequests    PickupRequest[]
+  settlements       SellerSettlement[]
+  wallet            SellerWallet?
+  payouts           SellerPayout[]
+  answers           ProductAnswer[]
+  auctionHistory    SellerAuctionHistory?
+  setupTokens       SellerSetupToken[]
+  auditLogs         SellerAuditLog[]
+
+  @@index([sellerType])
+  @@index([approvalStatus])
+}
+
+model IndividualProfile {
+  id       String @id @default(uuid())
+  sellerId String @unique
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  storeName String?
+  bio       String?
+  avatarUrl String?
+
+  fullName     String?
+  gender       String?
+  dob          DateTime?
+  nationality  String?
+  birthCountry String?
+  residence    String?
+  region       String?
+  city         String?
+  postalCode   String?
+  building     String?
+  street       String?
+  area         String?
+  profession   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model IndividualVerification {
+  id       String @id @default(uuid())
+  sellerId String @unique
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  status                  VerificationStatus @default(DRAFT)
+  submittedAt             DateTime?
+  reviewedAt              DateTime?
+  reviewedBy              String?
+  rejectionReason         String?
+  previousRejectionReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model IndividualDocument {
+  id       String @id @default(uuid())
+  sellerId String
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  documentType            String
+  documentNumber          String?
+  fileUrl                 String
+  s3ObjectKey             String?
+  backFileUrl             String?
+  backS3ObjectKey         String?
+  addressProofFileUrl     String?
+  addressProofS3ObjectKey String?
+  issueDate               DateTime?
+  expiryDate              DateTime?
+  verificationStatus      VerificationStatus @default(PENDING_REVIEW)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sellerId])
+}
+
+model IndividualBankAccount {
+  id       String @id @default(uuid())
+  sellerId String @unique
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  bankName           String
+  swiftCode          String
+  iban               String
+  beneficiaryAddress String?
+  beneficiaryCountry String?
+  beneficiaryCity    String?
+  verificationStatus VerificationStatus @default(PENDING_REVIEW)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BusinessProfile {
+  id       String @id @default(uuid())
+  sellerId String @unique
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  businessName           String?
+  legalBusinessName      String?
+  entityType             String?
+  businessType           String?
+  businessDomain         String?
+  businessNature         String?
+  establishedDate        DateTime?
+  tradeLicenseNumber     String?
+  tradeLicenseExpiryDate DateTime?
+  vatNumber              String?
+  website                String?
+  companyLogoUrl         String?
+  companyDescription     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BusinessVerification {
+  id       String @id @default(uuid())
+  sellerId String @unique
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  status                  VerificationStatus @default(DRAFT)
+  submittedAt             DateTime?
+  reviewedAt              DateTime?
+  reviewedBy              String?
+  rejectionReason         String?
+  previousRejectionReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BusinessContact {
+  id       String @id @default(uuid())
+  sellerId String @unique
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  contactPerson    String
+  designation      String?
+  businessEmail    String
+  businessPhone    String
+  alternativePhone String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BusinessDocument {
+  id       String @id @default(uuid())
+  sellerId String
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  documentType       String
+  documentNumber     String?
+  fileUrl            String
+  s3ObjectKey        String?
+  backFileUrl        String?
+  backS3ObjectKey    String?
+  issueDate          DateTime?
+  expiryDate         DateTime?
+  verificationStatus VerificationStatus @default(PENDING_REVIEW)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sellerId])
+}
+
+model BusinessBankAccount {
+  id       String @id @default(uuid())
+  sellerId String @unique
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  accountHolderName  String
+  bankName           String
+  last4Digits        String
+  currency           String
+  provider           String?
+  providerAccountId  String?
+  verificationStatus VerificationStatus @default(PENDING_REVIEW)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SellerAddress {
+  id       String @id @default(uuid())
+  sellerId String
+  seller   Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  addressType  AddressType
+  fullName     String
+  phoneNumber  String
+  addressLine1 String
+  addressLine2 String?
+  landmark     String?
+  city         String
+  state        String
+  countryId    String?
+  country      Country?    @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  postalCode   String
+  isDefault    Boolean     @default(false)
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  deletedAt    DateTime?
+
+  @@index([sellerId])
+  @@index([sellerId, isDefault])
+  @@index([sellerId, isActive])
+}
+
+model PaymentPolicy {
+  id                String   @id @default(uuid())
+  sellerId          String
+  seller            Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  policyName        String
+  description       String?
+  managedByTradAuct Boolean  @default(true)
+  cashOnDelivery    Boolean  @default(false)
+  checkPayment      Boolean  @default(false)
+  moneyOrder        Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([sellerId])
+}
+
+model SellerAuctionHistory {
+  id                           String    @id @default(uuid())
+  sellerId                     String    @unique
+  seller                       Seller    @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  totalAuctionsCreated         Int       @default(0)
+  reserveAuctionsCount         Int       @default(0)
+  firstReserveUsed             Boolean   @default(false)
+  firstAuctionTrialEligible    Boolean   @default(true) @map("first_auction_trial_eligible")
+  firstAuctionTrialUsed        Boolean   @default(false) @map("first_auction_trial_used")
+  firstAuctionTrialAuctionId   String?   @map("first_auction_trial_auction_id")
+  oneTimeTrialCancellationUsed Boolean   @default(false) @map("one_time_trial_cancellation_used")
+  trialCancellationUsedAt      DateTime? @map("trial_cancellation_used_at")
+  trialCancellationAuctionId   String?   @map("trial_cancellation_auction_id")
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
+
+  @@index([sellerId])
+}
+model KycDraft {
+  id               String   @id @default(uuid())
+  sellerId         String   @unique
+  seller           Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  documentType     String
+  extractedData    Json
+  confidenceScores Json
+  rawResult        Json?
+  fileUrl          String?
+  s3ObjectKey      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([sellerId])
+}
+
+model SellerSetupToken {
+  id         String    @id @default(uuid())
+  sellerId   String
+  seller     Seller    @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([sellerId])
+  @@index([expiresAt])
+}
+
+model SellerAuditLog {
+  id         String    @id @default(uuid())
+  sellerId   String
+  seller     Seller    @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  adminId    String?
+  action     String
+  details    Json?
+  createdAt  DateTime  @default(now())
+
+  @@index([sellerId])
+  @@index([action])
+  @@index([createdAt])
+}
+

@@ -1,0 +1,14 @@
+model Wishlist {
+  id        String  @id @default(uuid())
+  buyerId   String
+  buyer     Buyer   @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([buyerId, listingId])
+  @@index([buyerId])
+  @@index([listingId])
+}

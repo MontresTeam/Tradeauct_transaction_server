@@ -1,0 +1,88 @@
+model ServiceRequest {
+  id          String @id @default(uuid())
+  serviceType String // servicing, inspection, authentication, market-estimate, concierge
+  requestType String @default("STANDALONE") // STANDALONE, PRE_SALE_SELLER, POST_PURCHASE_BUYER
+  status      String @default("PENDING_REVIEW")
+  // PENDING_REVIEW, MORE_INFO_REQUIRED, QUOTATION_REQUIRED, QUOTATION_SENT, WAITING_FOR_CUSTOMER_APPROVAL, APPROVED_BY_CUSTOMER, WAITING_FOR_PAYMENT, WAITING_FOR_SHIPMENT, WATCH_IN_TRANSIT, WATCH_RECEIVED, UNDER_INSPECTION, ASSIGNED_TO_TECHNICIAN, ASSIGNED_TO_PARTNER, IN_PROGRESS, WAITING_FOR_PARTS, SERVICE_COMPLETED, READY_TO_RETURN, RETURN_ARRANGED, SHIPPED_BACK, COMPLETED, REJECTED, CANCELLED
+
+  paymentStatus String @default("PENDING") // PENDING, UNPAID, PAID, REFUNDED
+
+  // Optional user relation
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Watch Information
+  brand           String
+  model           String
+  referenceNumber String?
+  serialNumber    String?
+
+  // Specific Form Details stored as JSON object
+  details   Json
+  mediaUrls String[] @default([])
+
+  // Order/Listing relation
+  isOrderRelated       Boolean @default(false)
+  orderOrListingNumber String?
+
+  // Admin Assignment & Technicians
+  assignedPartnerId    String?
+  assignedPartnerName  String?
+  assignedPartnerEmail String?
+  assignedPartnerPhone String?
+  assignedTechnician   String?
+  assignedAt           DateTime?
+
+  // Notes
+  internalNotes String?
+  customerNotes String?
+
+  // Quotation Management
+  quotationAmount   Float?
+  quotationNotes    String?
+  quotationApproved Boolean?
+  quotationDetails  Json? // { laborCost, partsCost, shippingCost, tax, totalAmount, expiryDate, items }
+
+  // Reports attached
+  reports Json? // Array of reports [{ id, title, type, url, createdAt }]
+
+  // Private Shipping & Tracking Workflow
+  shippingInstructions String?
+  shippingAddress      String?
+  trackingNumber       String?
+  returnTrackingNumber String?
+
+  // Market Estimate Values
+  estimatedValueMin Float?
+  estimatedValueMax Float?
+  estimateNotes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([serviceType])
+  @@index([requestType])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([userId])
+}
+
+model ServiceTypeConfig {
+  id                 String   @id @default(uuid())
+  slug               String   @unique
+  name               String
+  shortDescription   String?
+  icon               String?
+  isActive           Boolean  @default(true)
+  displayOrder       Int      @default(0)
+  requiresPhotos     Boolean  @default(true)
+  requiresShipping   Boolean  @default(false)
+  requiresQuotation  Boolean  @default(false)
+  requiresPayment    Boolean  @default(false)
+  priceType          String   @default("QUOTATION") // FIXED, QUOTATION
+  fixedPrice         Float?
+  availableCountries String[] @default([])
+  formFields         Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}

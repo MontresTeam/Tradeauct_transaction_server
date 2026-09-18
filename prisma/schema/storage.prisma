@@ -1,0 +1,209 @@
+enum StorageStatus {
+  FREE_STORAGE
+  PAID_STORAGE
+  SELECTED_FOR_SHIPPING
+  SHIPMENT_REQUESTED
+  PACKING
+  SHIPPED
+  OVERDUE
+}
+
+enum BasicCheckupStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  ISSUE_FOUND
+  CANCELLED
+}
+
+enum ConsolidatedShipmentStatus {
+  REQUESTED
+  PACKING
+  LABEL_CREATED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum BuyerConfirmationStatus {
+  PENDING_RECEIPT
+  DELIVERED_PENDING_CONFIRMATION
+  CONFIRMED_BY_BUYER
+  AUTO_CONFIRMED
+  DISPUTE_OPENED
+}
+
+model StorageItem {
+  id                          String                @id @default(cuid())
+  fulfillmentOrderId          String                @unique @map("fulfillment_order_id")
+  fulfillmentOrder            FulfillmentOrder      @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+  listingId                   String                @map("listing_id")
+  listing                     Listing               @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  buyerId                     String                @map("buyer_id")
+  buyer                       Buyer                 @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId                    String                @map("seller_id")
+  seller                      Seller                @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  status                      StorageStatus         @default(FREE_STORAGE)
+
+  storageIntakeTimestamp      DateTime?             @map("storage_intake_timestamp")
+  storageFreeExpiryTimestamp  DateTime?             @map("storage_free_expiry_timestamp")
+
+  storageIntake               StorageIntake?
+  storageRelease              StorageRelease?
+  feeLedgerEntries            StorageFeeLedger[]
+  consolidatedShipmentItems   ConsolidatedShipmentItem[]
+
+  createdAt                   DateTime              @default(now()) @map("created_at")
+  updatedAt                   DateTime              @updatedAt @map("updated_at")
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([status])
+  @@map("storage_items")
+}
+
+model StorageIntake {
+  id                     String      @id @default(cuid())
+  storageItemId          String      @unique @map("storage_item_id")
+  storageItem            StorageItem @relation(fields: [storageItemId], references: [id], onDelete: Cascade)
+  fulfillmentOrderId     String      @map("fulfillment_order_id")
+  receivedAt             DateTime    @default(now()) @map("received_at")
+  intakeCompletedAt      DateTime    @default(now()) @map("intake_completed_at")
+  staffId                String      @map("staff_id")
+  basicItemPhotos        Json        @map("basic_item_photos") // Array of image URLs
+  basicExternalCondition String      @map("basic_external_condition")
+  packageCondition       String      @map("package_condition")
+  boxPapersAccessories   Json        @map("box_papers_accessories")
+  serialOrRefNumber      String?     @map("serial_or_ref_number")
+  notes                  String?
+  createdAt              DateTime    @default(now()) @map("created_at")
+
+  @@index([storageItemId])
+  @@index([fulfillmentOrderId])
+  @@map("storage_intakes")
+}
+
+model StorageRelease {
+  id                    String      @id @default(cuid())
+  storageItemId         String      @unique @map("storage_item_id")
+  storageItem           StorageItem @relation(fields: [storageItemId], references: [id], onDelete: Cascade)
+  fulfillmentOrderId    String      @map("fulfillment_order_id")
+  releaseDateTime       DateTime    @default(now()) @map("release_date_time")
+  staffId               String      @map("staff_id")
+  itemConditionPhotos   Json        @map("item_condition_photos")
+  boxPapersAccessories  Json        @map("box_papers_accessories")
+  itemIdentityReference String?     @map("item_identity_reference")
+  packingEvidence       Json        @map("packing_evidence")
+  shipmentId            String?     @map("shipment_id")
+  consolidatedShipmentId String?    @map("consolidated_shipment_id")
+  createdAt             DateTime    @default(now()) @map("created_at")
+
+  @@index([storageItemId])
+  @@index([fulfillmentOrderId])
+  @@map("storage_releases")
+}
+
+model StorageFeeLedger {
+  id                     String      @id @default(cuid())
+  storageItemId          String      @map("storage_item_id")
+  storageItem            StorageItem @relation(fields: [storageItemId], references: [id], onDelete: Cascade)
+  fulfillmentOrderId     String      @map("fulfillment_order_id")
+  buyerId                String      @map("buyer_id")
+  freeDaysGranted        Int         @default(15) @map("free_days_granted")
+  paidDaysAccrued        Int         @default(0) @map("paid_days_accrued")
+  dailyRate              Float       @default(10) @map("daily_rate")
+  totalFeeAccrued        Float       @default(0) @map("total_fee_accrued")
+  totalFeePaid           Float       @default(0) @map("total_fee_paid")
+  isPaid                 Boolean     @default(false) @map("is_paid")
+  consolidatedShipmentId String?     @map("consolidated_shipment_id")
+  createdAt              DateTime    @default(now()) @map("created_at")
+  updatedAt              DateTime    @updatedAt @map("updated_at")
+
+  @@index([storageItemId])
+  @@index([buyerId])
+  @@map("storage_fee_ledgers")
+}
+
+model ConsolidatedShipment {
+  id                     String                     @id @default(cuid())
+  shipmentNumber         String                     @unique @map("shipment_number")
+  buyerId                String                     @map("buyer_id")
+  buyer                  Buyer                      @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  status                 ConsolidatedShipmentStatus @default(REQUESTED)
+  destinationAddress     Json                       @map("destination_address")
+  destinationCountry     String                     @default("United Arab Emirates") @map("destination_country")
+  combinedWeightKg       Float                      @default(0) @map("combined_weight_kg")
+  totalDeclaredValue     Float                      @default(0) @map("total_declared_value")
+  storageFeesTotal       Float                      @default(0) @map("storage_fees_total")
+  shippingFee            Float                      @default(0) @map("shipping_fee")
+  insuranceFee           Float                      @default(0) @map("insurance_fee")
+  vatFee                 Float                      @default(0) @map("vat_fee")
+  totalAmount            Float                      @default(0) @map("total_amount")
+  currency               String                     @default("AED")
+  paymentStatus          String                     @default("PENDING") @map("payment_status")
+  stripePaymentIntentId  String?                    @map("stripe_payment_intent_id")
+  trackingNumber         String?                    @unique @map("tracking_number")
+  courierName            String?                    @map("courier_name")
+  shippedAt              DateTime?                  @map("shipped_at")
+  deliveredAt            DateTime?                  @map("delivered_at")
+  receiptConfirmedAt     DateTime?                  @map("receipt_confirmed_at")
+  autoReceiptAt          DateTime?                  @map("auto_receipt_at")
+  protectionExpiresAt    DateTime?                  @map("protection_expires_at")
+  createdAt              DateTime                   @default(now()) @map("created_at")
+  updatedAt              DateTime                   @updatedAt @map("updated_at")
+
+  items                  ConsolidatedShipmentItem[]
+
+  @@index([buyerId])
+  @@index([status])
+  @@map("consolidated_shipments")
+}
+
+model ConsolidatedShipmentItem {
+  id                     String               @id @default(cuid())
+  consolidatedShipmentId String               @map("consolidated_shipment_id")
+  consolidatedShipment   ConsolidatedShipment @relation(fields: [consolidatedShipmentId], references: [id], onDelete: Cascade)
+  storageItemId          String               @map("storage_item_id")
+  storageItem            StorageItem          @relation(fields: [storageItemId], references: [id], onDelete: Cascade)
+  fulfillmentOrderId     String               @map("fulfillment_order_id")
+  declaredValue          Float                @default(0) @map("declared_value")
+  storageFee             Float                @default(0) @map("storage_fee")
+  paidDays               Int                  @default(0) @map("paid_days")
+  createdAt              DateTime             @default(now()) @map("created_at")
+
+  @@index([consolidatedShipmentId])
+  @@index([storageItemId])
+  @@map("consolidated_shipment_items")
+}
+
+model BasicCheckup {
+  id                   String             @id @default(cuid())
+  fulfillmentOrderId   String             @unique @map("fulfillment_order_id")
+  fulfillmentOrder     FulfillmentOrder   @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+  listingId            String             @map("listing_id")
+  listing              Listing            @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  buyerId              String             @map("buyer_id")
+  buyer                Buyer              @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId             String             @map("seller_id")
+  seller               Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  status               BasicCheckupStatus @default(PENDING)
+  price                Float              @default(20)
+  requestedAt          DateTime           @default(now()) @map("requested_at")
+  completedAt          DateTime?          @map("completed_at")
+  technicianId         String?            @map("technician_id")
+  checksPerformed      Json?              @map("checks_performed")
+  result               String?            @map("result")
+  timegrapherReading   Json?              @map("timegrapher_reading")
+  notes                String?
+  supportingPhotos     Json?              @map("supporting_photos")
+  disclaimer           String             @default("Basic Check-up is an optional preliminary visual and operational verification. It does NOT constitute certified authentication, mechanical warranty, or valuation.")
+  buyerReviewRequired  Boolean            @default(false) @map("buyer_review_required")
+  buyerReviewedAt      DateTime?          @map("buyer_reviewed_at")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([status])
+  @@map("basic_checkups")
+}

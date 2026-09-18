@@ -1,0 +1,52 @@
+model MarketObservation {
+  id             String    @id @default(cuid())
+  source         String    // "EBAY", "TRADEAUCT", "WATCHCHARTS", etc.
+  sourceItemId   String
+  category       String    @default("WATCH")
+  brand          String?
+  model          String?
+  reference      String?
+  configuration  String?
+  condition      String?   // "NEW", "LIKE_NEW", "USED", "FOR_PARTS"
+  productionYear Int?
+  box            Boolean?
+  papers         Boolean?
+  price          Float
+  currency       String    @default("USD")
+  region         String?
+  listingType    String    // "ACTIVE", "SOLD", "COMPLETED"
+  title          String
+  listingUrl     String?
+  imageUrl       String?
+  observedAt     DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([source, sourceItemId])
+  @@index([category, brand, reference])
+  @@index([reference])
+}
+
+model ValuationLog {
+  id              String   @id @default(cuid())
+  category        String   @default("WATCH")
+  brand           String?
+  model           String?
+  reference       String?
+  condition       String?
+  productionYear  Int?
+  box             Boolean?
+  papers          Boolean?
+  region          String?
+  lowEstimate     Float?
+  highEstimate    Float?
+  medianEstimate  Float?
+  currency        String   @default("AED")
+  confidence      String?  // "HIGH", "MEDIUM", "LOW", "INSUFFICIENT"
+  comparableCount Int      @default(0)
+  requestedById   String?
+  createdAt       DateTime @default(now())
+
+  @@index([category, brand, reference])
+  @@index([createdAt])
+}

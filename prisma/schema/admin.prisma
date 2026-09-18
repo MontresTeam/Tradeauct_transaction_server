@@ -1,0 +1,60 @@
+model AdminRole {
+  id          String      @id @default(uuid())
+  name        String
+  code        String      @unique
+  permissions Json
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  adminUsers  AdminUser[]
+
+  @@index([code])
+}
+
+model AdminUser {
+  id                  String                  @id @default(uuid())
+  email               String                  @unique
+  passwordHash        String
+  roleId              String
+  role                AdminRole               @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  name                String
+  mobileNumber        String?                 @unique
+  isActive            Boolean                 @default(true)
+  deletedAt           DateTime?
+  failedLoginAttempts Int                     @default(0)
+  lockUntil           DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  refreshTokens       AdminRefreshToken[]
+  passwordOtps        AdminPasswordResetOtp[]
+
+  @@index([roleId])
+  @@index([isActive])
+}
+
+model AdminRefreshToken {
+  id          String    @id @default(uuid())
+  tokenHash   String    @unique
+  adminUserId String
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId])
+  @@index([expiresAt])
+}
+
+model AdminPasswordResetOtp {
+  id        String    @id @default(uuid())
+  userId    String
+  otpHash   String
+  expiresAt DateTime
+  usedAt    DateTime?
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}

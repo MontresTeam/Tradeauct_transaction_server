@@ -1,0 +1,99 @@
+enum AttributeFieldType {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DROPDOWN
+  MULTI_SELECT
+  YES_NO
+  BOOLEAN
+  DATE
+  YEAR
+  MEASUREMENT
+  UPLOAD
+}
+
+model Category {
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
+  description      String?
+  parentId         String?
+  parent           Category? @relation("CategoryParent", fields: [parentId], references: [id], onDelete: Cascade)
+  children         Category[] @relation("CategoryParent")
+  level            Int      @default(0)
+  image            String?
+  sortOrder        Int      @default(0)
+  isActive         Boolean  @default(true)
+  isPublic         Boolean  @default(true)
+  isSellerEnabled  Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  categoryAttributes CategoryAttribute[]
+  listings           Listing[]           @relation("ListingCategory")
+  subcategoryListings Listing[]          @relation("ListingSubcategory")
+  products           Product[]           @relation("ProductCategory")
+  subcategoryProducts Product[]          @relation("ProductSubcategory")
+
+  @@index([parentId])
+  @@index([slug])
+  @@index([isActive, isPublic, isSellerEnabled])
+}
+
+model Attribute {
+  id              String             @id @default(cuid())
+  name            String
+  slug            String             @unique
+  fieldType       AttributeFieldType @default(TEXT)
+  description     String?
+  placeholder     String?
+  helpText        String?
+  defaultValue    String?
+  validationRules Json?
+  isReusable      Boolean            @default(true)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  categoryAttributes CategoryAttribute[]
+  listingValues      ListingAttributeValue[]
+  productValues      ProductAttributeValue[]
+
+  @@index([slug])
+}
+
+model CategoryAttribute {
+  id              String      @id @default(cuid())
+  categoryId      String
+  category        Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  attributeId     String
+  attribute       Attribute   @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  customLabel     String?
+  isRequired      Boolean     @default(false)
+  isHidden        Boolean     @default(false)
+  sortOrder       Int         @default(0)
+  dropdownOptions Json?
+  validationRules Json?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@unique([categoryId, attributeId])
+  @@index([categoryId])
+  @@index([attributeId])
+}
+
+model ListingAttributeValue {
+  id              String    @id @default(cuid())
+  listingId       String
+  listing         Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  attributeId     String
+  attribute       Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  value           String?
+  structuredValue Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([listingId, attributeId])
+  @@index([listingId])
+  @@index([attributeId])
+  @@index([attributeId, value])
+}

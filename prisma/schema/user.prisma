@@ -1,0 +1,128 @@
+model User {
+  id           String  @id @default(uuid())
+  firstName    String
+  lastName     String
+  email        String  @unique
+  mobileNumber String? @unique
+  password     String?
+  country      String?
+  preferredLanguage String? @default("en")
+  preferredCurrency String? @default("AED")
+
+  // Social auth
+  provider     String  @default("local")
+  providerId   String?
+  profileImage String?
+  mustChangePassword Boolean @default(false)
+
+  // Verification
+  isEmailVerified  Boolean @default(false)
+  isMobileVerified Boolean @default(false)
+
+  // Terms & Privacy
+  acceptedTerms   Boolean   @default(true)
+  acceptedTermsAt DateTime?
+
+  // User Status
+  role   UserRole   @default(BUYER)
+  status UserStatus @default(ACTIVE)
+
+  // Timestamps
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  // Relations
+  buyer           Buyer?
+  seller          Seller?
+  profile         UserProfile?
+  otps            Otp[]
+  serviceRequests ServiceRequest[]
+  votes           QuestionVote[]
+  notifications   Notification[]
+}
+
+enum UserRole {
+  BUYER
+  SELLER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  PENDING
+  SUSPENDED
+  BLOCKED
+}
+
+enum OtpType {
+  EMAIL_VERIFICATION
+  MOBILE_VERIFICATION
+  PASSWORD_RESET
+}
+
+model Otp {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      OtpType
+  hash      String
+  expiresAt DateTime
+  attempts  Int       @default(0)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, type])
+  @@index([expiresAt])
+}
+
+enum BuyerAddressType {
+  SHIPPING
+  BILLING
+}
+
+model Buyer {
+  id                  String               @id @default(uuid())
+  userId              String               @unique
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripeCustomerId    String?              @unique
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  deletedAt           DateTime?
+  bids                Bid[]
+  offers              Offer[]
+  payments            Payment[]
+  savedPaymentMethods SavedPaymentMethod[]
+  addresses           BuyerAddress[]
+  wonAuctions         Auction[]
+  wishlist            Wishlist[]
+  fulfillmentOrders   FulfillmentOrder[]
+  questions           ProductQuestion[]
+  storageItems        StorageItem[]
+  consolidatedShipments ConsolidatedShipment[]
+  basicCheckups       BasicCheckup[]
+}
+
+model BuyerAddress {
+  id           String           @id @default(uuid())
+  buyerId      String
+  buyer        Buyer            @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  addressType  BuyerAddressType @default(SHIPPING)
+  fullName     String
+  phoneNumber  String
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  state        String
+  countryId    String?
+  country      Country?         @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  postalCode   String
+  isDefault    Boolean          @default(false)
+  isActive     Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([buyerId])
+}

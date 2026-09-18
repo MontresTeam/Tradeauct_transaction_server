@@ -1,0 +1,27 @@
+// ---------------------------------------------------------------------------
+// IdempotencyKey — deduplication store for at-most-once payment operations.
+//
+// Same key + same request body → replay the stored response.
+// Same key + different body → conflict error.
+//
+// Owned exclusively by the Transaction Server. The Main Backend must not
+// implement a competing payment idempotency mechanism.
+// ---------------------------------------------------------------------------
+
+/// Idempotency-Key store: same key plus same body replays the stored response.
+model IdempotencyKey {
+  id             String    @id @default(cuid())
+  key            String
+  scope          String
+  actorId        String?
+  requestHash    String
+  responseStatus Int?
+  responseBody   Json?
+  lockedAt       DateTime  @default(now())
+  completedAt    DateTime?
+  expiresAt      DateTime
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
