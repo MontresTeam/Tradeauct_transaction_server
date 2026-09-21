@@ -8,11 +8,25 @@
 // via the Transaction Server API; it must not write these tables.
 // ---------------------------------------------------------------------------
 
+/// A transfer's own lifecycle, which is not the settlement's.
+///
+/// PENDING      - the row exists, the Stripe call has not returned
+/// TRANSFERRED  - money is in the connected account's Stripe balance
+/// PAYOUT_PENDING - Stripe has created a bank payout that includes it
+/// PAID_OUT     - that payout is paid
+/// FAILED       - Stripe refused the transfer
+/// PARTIALLY_REVERSED / REVERSED - pulled back, in part or in full
 enum PayoutTransferStatus {
   PENDING
-  PAID
+  TRANSFERRED
+  PAYOUT_PENDING
+  PAID_OUT
   FAILED
+  PARTIALLY_REVERSED
   REVERSED
+
+  // --- deprecated, read-only: pre-automation manual payouts ---
+  PAID
 }
 
 /// Stripe Connect account for a seller, enabling direct payouts.
@@ -29,7 +43,14 @@ model ConnectAccount {
   payoutsEnabled   Boolean   @default(false)
   detailsSubmitted Boolean   @default(false)
   requirementsDue  Json?
+  requirementsCurrentlyDue  Json?
+  requirementsPastDue       Json?
+  requirementsDisabledUntil DateTime?
   disabledReason   String?
+  /// "NOT_STARTED" | "IN_PROGRESS" | "PENDING_VERIFICATION" | "COMPLETE" | "RESTRICTED"
+  onboardingStatus String   @default("NOT_STARTED")
+  payoutSchedule   String?
+  lastSyncedAt     DateTime?
   onboardedAt      DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -41,25 +62,52 @@ model ConnectAccount {
 model PayoutTransfer {
   id String @id @default(cuid())
 
-  /// Cross-service reference to Main Backend SellerPayout row ID.
-  sellerPayoutId String
+  /// The settlement this transfer pays. Unique: one settlement is transferred
+  /// once, which is what stops two workers paying the same seller twice.
+  settlementId String? @unique
+
+  /// Set only for the admin manual-payout override, which has no settlement
+  /// transfer behind it.
+  sellerPayoutId String?
 
   /// Cross-service reference to Main Backend Seller. No Prisma relation.
   sellerId String
 
+  /// Which provider moved the money: STRIPE_CONNECT or MANUAL.
+  provider String @default("STRIPE_CONNECT")
+
+  stripeAccountId     String?
   stripeTransferId    String?              @unique
   stripePayoutId      String?
+  transferGroup       String?
+  sourceTransaction   String?
+  /// The payment this transfer created on the connected account. It is what a
+  /// later bank payout's balance transactions name, so it is how a bundled
+  /// payout is attributed back to individual settlements.
+  destinationPaymentId String?
+  /// Stripe's own payout status string, kept verbatim for reconciliation.
+  stripePayoutStatus  String?
+
   amountMinor         BigInt
+  reversedAmountMinor BigInt               @default(0)
   currency            String               @default("AED")
   status              PayoutTransferStatus @default(PENDING)
   failureCode         String?
   failureMessage      String?
   idempotencyKey      String               @unique
   ledgerTransactionId String?
+  transferredAt       DateTime?
+  paidOutAt           DateTime?
+  /// Bank reference for a manual payout.
+  manualReference     String?
+  processedById       String?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 
   @@index([sellerPayoutId])
   @@index([sellerId])
+  @@index([status])
+  @@index([stripePayoutId])
+  @@index([destinationPaymentId])
   @@map("payout_transfers")
 }

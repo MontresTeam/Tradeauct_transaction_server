@@ -105,10 +105,29 @@ export class CheckoutService {
         metadata: quote.metadata,
         receipt_email: quote.buyer.email || undefined,
         automatic_payment_methods: { enabled: true },
+        // Ties the buyer's charge to the seller's later transfer. Stripe uses
+        // it to group the two sides of the order, which is what makes a
+        // delayed settlement traceable and reconcilable.
+        transfer_group: `order_${quote.orderNumber}`,
       },
-      // Keyed on the listing and the exact total, so a retried request reuses
-      // the same intent while a re-quoted order gets a new one.
-      { idempotencyKey: `intent:${quote.listing.id}:${quote.totalMinor}` },
+      /**
+       * Keyed on the order, not just the listing and the total.
+       *
+       * The order number is minted fresh for every quote and travels in the
+       * metadata, the description and the transfer group — so two quotes for
+       * the same listing at the same price sent *different* parameters under
+       * the same key, and Stripe refused the second outright:
+       *
+       *   "Keys for idempotent requests can only be used with the same
+       *    parameters they were first used with."
+       *
+       * Once a buyer hit that, every retry at that price failed. Scoping the
+       * key to the order fixes it: a network-level retry of this same call
+       * replays, and a genuine re-quote is a different order and gets its own
+       * key. Double-clicking is already stopped upstream by the HTTP
+       * Idempotency-Key.
+       */
+      { idempotencyKey: `intent:${quote.listing.id}:${quote.orderNumber}:${quote.totalMinor}` },
     );
 
     const paymentId = await CheckoutService.upsertPendingPayment(quote, intent.id);
@@ -222,7 +241,9 @@ export class CheckoutService {
         success_url: `${input.successUrl}${input.successUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}&order_number=${quote.orderNumber}`,
         cancel_url: input.cancelUrl,
       },
-      { idempotencyKey: `session:${quote.listing.id}:${quote.totalMinor}` },
+      // Scoped to the order for the same reason as the PaymentIntent above:
+      // the order number varies per quote and is part of what is sent.
+      { idempotencyKey: `session:${quote.listing.id}:${quote.orderNumber}:${quote.totalMinor}` },
     );
 
     const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : session.id;

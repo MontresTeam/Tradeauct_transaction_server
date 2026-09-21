@@ -9,6 +9,7 @@ import { closeQueues, initQueue } from "./core/queue.js";
 import { startRecoveryScheduler, stopRecoveryScheduler } from "./modules/charges/charges.service.js";
 import { initTxnCommandsWorker, stopTxnCommandsWorker } from "./modules/commands/txnCommands.worker.js";
 import { initStripeWebhookWorker, stopStripeWebhookWorker } from "./modules/gateway/stripeWebhook.worker.js";
+import { initSettlementWorker, stopSettlementWorker } from "./modules/settlements/settlement.worker.js";
 
 const env = loadEnv();
 setLogLevel(env.LOG_LEVEL);
@@ -27,6 +28,9 @@ async function startServer(): Promise<void> {
     // Must run after initQueue: it reuses that Redis connection.
     initStripeWebhookWorker();
     initTxnCommandsWorker();
+    // Release, transfer, reconciliation and idempotency-key cleanup. Its
+    // repeatable schedules are registered here, not per request.
+    initSettlementWorker();
     startOutboxRelay();
     if (env.NODE_ENV !== "test") {
       startRecoveryScheduler();
@@ -51,6 +55,7 @@ async function shutdown(signal: string): Promise<void> {
   stopRecoveryScheduler();
   await stopTxnCommandsWorker();
   await stopStripeWebhookWorker();
+  await stopSettlementWorker();
   server.close();
   await closeQueues();
   await prisma.$disconnect();

@@ -237,6 +237,11 @@ model Payment {
   gateway               PaymentGateway    @default(STRIPE)
   gatewayTransactionId  String?           @unique
   stripePaymentIntentId String?           @unique
+  /// The intent's latest_charge, persisted at finalization. A later seller
+  /// transfer names it as its source_transaction.
+  stripeChargeId        String?
+  /// Ties the buyer's charge and the seller's transfer together in Stripe.
+  transferGroup         String?
   status                PaymentStatus     @default(PENDING)
   failureReason         String?
   paymentRecoveryStatus PaymentRecoveryStatus @default(NOT_REQUIRED)
@@ -257,6 +262,7 @@ model Payment {
 
   @@index([buyerId])
   @@index([auctionId])
+  @@index([stripeChargeId])
 }
 
 model SavedPaymentMethod {
@@ -563,15 +569,62 @@ enum DisputeResolutionOutcome {
   CLAIM_REJECTED_CLOSED
 }
 
+/// Settlement lifecycle.
+///
+/// The live states are PENDING → ON_HOLD → ELIGIBLE → TRANSFER_PENDING →
+/// TRANSFERRED → PAID_OUT, with FROZEN, DISPUTED, TRANSFER_FAILED, REFUNDED
+/// and CANCELLED as the exception branches.
+///
+/// Note that ON_HOLD changed meaning: it now means "delivered, protection
+/// window running", not "an admin put a hold on it". An admin hold is
+/// FROZEN with frozenReason = ADMIN_HOLD.
+///
+/// The members below the divider are retained only so the pre-automation rows
+/// still parse. Nothing writes them. The data migration maps them across; see
+/// payment_settlement_implementation_plan.md §6.
 enum SettlementStatus {
   PENDING
   ON_HOLD
+  ELIGIBLE
+  TRANSFER_PENDING
+  TRANSFERRED
+  PAID_OUT
+  FROZEN
+  DISPUTED
+  TRANSFER_FAILED
+  REFUNDED
+  CANCELLED
+
+  // --- deprecated, read-only ---
   DISPUTE_OPEN
   RETURN_IN_PROGRESS
-  ELIGIBLE
   AVAILABLE_FOR_PAYOUT
   PAID
-  CANCELLED
+}
+
+/// Why a settlement is frozen. Kept alongside the status so unfreezing can
+/// return the settlement to exactly the state it came from.
+enum SettlementFrozenReason {
+  ADMIN_HOLD
+  RETURN
+  BUYER_DISPUTE_CASE
+  UNRESOLVED_ISSUE
+  RECONCILIATION_EXCEPTION
+}
+
+/// A debt owed back to the platform after the seller has already been paid.
+enum SettlementRecoveryStatus {
+  OPEN
+  PARTIALLY_RECOVERED
+  RECOVERED
+  WRITTEN_OFF
+}
+
+enum SettlementRecoveryCause {
+  REFUND_AFTER_PAYOUT
+  DISPUTE_LOST_AFTER_PAYOUT
+  CHARGEBACK
+  MANUAL_ADJUSTMENT
 }
 
 enum PayoutStatus {
@@ -662,8 +715,16 @@ model DisputeMilestone {
 model SellerSettlement {
   id                   String           @id @default(cuid())
   settlementNumber     String           @unique
-  fulfillmentOrderId   String           @unique
-  fulfillmentOrder     FulfillmentOrder @relation(fields: [fulfillmentOrderId], references: [id], onDelete: Cascade)
+
+  /// The settlement is created when the payment is recorded, which is before
+  /// the main server has built the fulfilment order — so this is nullable and
+  /// linked later by the FULFILLMENT_ORDER_CREATED command.
+  fulfillmentOrderId   String?           @unique
+  fulfillmentOrder     FulfillmentOrder? @relation(fields: [fulfillmentOrderId], references: [id], onDelete: SetNull)
+
+  /// The real key. One paid payment, one settlement.
+  paymentId            String?          @unique
+
   sellerId             String
   seller               Seller           @relation(fields: [sellerId], references: [id], onDelete: Cascade)
 
@@ -686,6 +747,16 @@ model SellerSettlement {
   adjustmentAmount     Float            @default(0)
   netProceeds          Float            // Sale Amount - Platform Fee - (Actual Shipping if Seller Pays) - Deductions
 
+  // Fee Engine snapshot, copied onto the settlement at payment time so a later
+  // change to the fee configuration cannot move an order that already sold.
+  feeRuleType             String?
+  feeConfigurationVersion String?
+  sellerFeePercent        Float?
+  buyerFeePercent         Float?
+  sellerFeeAmount         Float?
+  buyerFeeAmount          Float?
+  feeCalculatedAt         DateTime?
+
   // Status & Lifecycle Timestamps
   settlementStatus     SettlementStatus @default(PENDING)
   payoutStatus         PayoutStatus     @default(UNPAID)
@@ -693,22 +764,120 @@ model SellerSettlement {
   holdPlacedById       String?
   holdPlacedAt         DateTime?
 
+  /// Why the settlement is frozen, and what state to put it back into.
+  frozenReason         SettlementFrozenReason?
+  frozenFromStatus     SettlementStatus?
+  frozenAt             DateTime?
+
   deliveredAt          DateTime?
+  deliverySource       String?
   receiptConfirmedAt   DateTime?
   autoReceiptAt        DateTime?
+
+  /// Snapshotted from SETTLEMENT_CONFIG at delivery, so an admin changing the
+  /// period never moves an order that is already in its window.
+  protectionPeriodDays Int?
   protectionExpiresAt  DateTime?
   eligibleAt           DateTime?
   settledAt            DateTime?
+
+  // Stripe transfer / payout tracking. A transfer moves money to the seller's
+  // connected account; a payout moves it from there to their bank. They are
+  // separate events and are tracked separately.
+  stripeConnectedAccountId String?
+  stripeTransferId         String?
+  stripeTransferStatus     String?
+  transferredAt            DateTime?
+  stripePayoutId           String?
+  stripePayoutStatus       String?
+  paidOutAt                DateTime?
+  payoutMethod             String?
+  transferFailureCode      String?
+  transferFailureMessage   String?
+  transferAttempts         Int              @default(0)
+
+  /// True while money is owed back after the seller was already paid. The
+  /// status stays PAID_OUT — history is never rewritten.
+  hasOpenRecovery      Boolean          @default(false)
 
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
   adjustments          SettlementAdjustment[]
   auditLogs            FinancialAuditLog[]
+  recoveries           SettlementRecovery[]
 
   @@index([sellerId])
   @@index([settlementStatus])
   @@index([payoutStatus])
+  @@index([settlementStatus, eligibleAt])
+  @@index([hasOpenRecovery])
+}
+
+/// Money owed back to the platform after a payout has already gone out.
+///
+/// A refund or a lost dispute after PAID_OUT never edits the settlement's
+/// status. It opens one of these instead, which is then either reversed out of
+/// the connected account's balance or offset against the seller's next
+/// transfers.
+model SettlementRecovery {
+  id                  String                   @id @default(cuid())
+  settlementId        String
+  settlement          SellerSettlement         @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  sellerId            String
+
+  cause               SettlementRecoveryCause
+  status              SettlementRecoveryStatus @default(OPEN)
+  amountMinor         BigInt
+  recoveredMinor      BigInt                   @default(0)
+  currency            String                   @default("AED")
+
+  /// Set when part or all of the debt was pulled back out of the connected
+  /// account rather than offset against a future settlement.
+  stripeTransferReversalId String?
+
+  sourceType          String?
+  sourceId            String?
+  notes               String?
+  resolvedAt          DateTime?
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+
+  @@index([sellerId, status])
+  @@index([settlementId])
+  @@map("settlement_recoveries")
+}
+
+enum ReconciliationExceptionStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  IGNORED
+}
+
+/// A disagreement between TradeAuct's records and Stripe's, raised by the
+/// hourly reconciliation job for a person to look at.
+model ReconciliationException {
+  id             String                        @id @default(cuid())
+  kind           String
+  severity       String                        @default("WARNING")
+  entityType     String
+  entityId       String
+  expectedMinor  BigInt?
+  actualMinor    BigInt?
+  currency       String                        @default("AED")
+  detail         Json?
+  status         ReconciliationExceptionStatus @default(OPEN)
+  resolvedById   String?
+  resolvedAt     DateTime?
+  resolutionNote String?
+  firstSeenAt    DateTime                      @default(now())
+  lastSeenAt     DateTime                      @default(now())
+  occurrences    Int                           @default(1)
+
+  @@unique([kind, entityType, entityId])
+  @@index([status, severity])
+  @@map("reconciliation_exceptions")
 }
 
 model SettlementAdjustment {

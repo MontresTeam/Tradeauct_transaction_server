@@ -34,5 +34,15 @@ export type StripeWebhookHandlerResult = {
 
 export type StripeWebhookHandler = (event: Stripe.Event) => Promise<StripeWebhookHandlerResult>;
 
-/** The only route on this server reachable from the public internet. */
+/** The two routes on this server reachable from the public internet. */
 export const STRIPE_WEBHOOK_PATH = "/webhooks/stripe";
+
+/**
+ * Connect events are delivered separately and signed with a different secret,
+ * so they get their own endpoint. Events that arrive here carry `event.account`
+ * naming the connected account they concern.
+ */
+export const STRIPE_CONNECT_WEBHOOK_PATH = "/webhooks/stripe/connect";
+
+/** Which endpoint a delivery arrived on, and therefore which secret verifies it. */
+export type StripeWebhookSource = "platform" | "connect";

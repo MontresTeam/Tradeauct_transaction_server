@@ -21,6 +21,7 @@ import { enqueueOutboxEvent, TXN_EVENTS } from "../../core/outbox.js";
 import { type PrismaTransaction, prisma } from "../../core/prisma.js";
 import { getStripeClient } from "../gateway/stripe.client.js";
 import { postTransaction } from "../ledger/ledger.service.js";
+import { createSettlementForPayment } from "../settlements/settlement.service.js";
 
 const RECOVERY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -160,6 +161,14 @@ export class PaymentFinalizationService {
     const orderNumber = meta.orderNumber ? String(meta.orderNumber) : await generateOrderNumber();
     const total = Number(breakdown.totalMinor) / 10 ** currencyExponent(currency);
 
+    // The charge is what a later seller transfer names as its
+    // source_transaction, and the transfer group is what ties the two sides of
+    // the order together in Stripe. Both are recorded now, while the intent is
+    // in hand.
+    const stripeChargeId =
+      typeof intent.latest_charge === "string" ? intent.latest_charge : (intent.latest_charge?.id ?? null);
+    const transferGroup = intent.transfer_group ?? `order_${orderNumber}`;
+
     const paymentId = await prisma.$transaction(async (tx) => {
       const payment = await tx.payment.upsert({
         where: { listingId },
@@ -173,6 +182,8 @@ export class PaymentFinalizationService {
           gateway: "STRIPE",
           stripePaymentIntentId: paymentIntentId,
           gatewayTransactionId: paymentIntentId,
+          stripeChargeId,
+          transferGroup,
           paymentRecoveryStatus: "RECOVERED",
           paidAt: new Date(),
         },
@@ -188,6 +199,8 @@ export class PaymentFinalizationService {
           status: "PAID",
           stripePaymentIntentId: paymentIntentId,
           gatewayTransactionId: paymentIntentId,
+          stripeChargeId,
+          transferGroup,
           paidAt: new Date(),
         },
       });
@@ -261,6 +274,22 @@ export class PaymentFinalizationService {
                 ]
               : []),
           ],
+        },
+        tx,
+      );
+
+      // The seller's settlement is created here, inside the same transaction
+      // as the charge posting, so a paid order can never exist without one.
+      // It starts PENDING: nothing moves to the seller until the item has been
+      // delivered and the protection period has run.
+      await createSettlementForPayment(
+        {
+          paymentId: payment.id,
+          sellerId: listing.sellerId,
+          listingId,
+          salePrice: minorToMajor(breakdown.purchasePriceMinor, currency),
+          currency,
+          estimatedShipping: minorToMajor(breakdown.shippingMinor, currency),
         },
         tx,
       );

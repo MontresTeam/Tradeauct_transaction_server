@@ -14,7 +14,9 @@
 import { AppError } from "../../core/errors/AppError.js";
 import { currencyExponent, toMinorUnits } from "../../core/money.js";
 import { prisma } from "../../core/prisma.js";
-import { calculateLiveTotalBreakdown, getAuthoritativeFeeConfigs } from "./buyerFee.utils.js";
+import { FeeEngineService } from "../fees/feeEngine.service.js";
+import type { OrderFeeCalculation } from "../fees/feeEngine.types.js";
+import { calculateOrderTotals, getAuthoritativeChargeConfigs } from "./orderTotals.utils.js";
 import { ShippingRateService } from "./shippingRate.service.js";
 
 /** Currency is fixed for now; every stored amount says AED. */
@@ -58,6 +60,8 @@ export type OrderQuote = {
     vat: number;
     totalAmount: number;
   };
+  /** Which rule produced the buyer fee, and what the seller side will be. */
+  fees: OrderFeeCalculation;
   totalMinor: bigint;
   /** Exactly what is attached to the Stripe object, and later reconciled. */
   metadata: Record<string, string>;
@@ -136,23 +140,39 @@ export async function buildOrderQuote(input: QuoteInput): Promise<OrderQuote> {
   }
 
   const shippingCost = shippingRate.isFree ? 0 : shippingRate.rate;
-  const feeConfigs = await getAuthoritativeFeeConfigs();
+  const chargeConfigs = await getAuthoritativeChargeConfigs();
 
-  const breakdown = calculateLiveTotalBreakdown({
-    bidAmount: purchasePrice,
+  /**
+   * The buyer fee comes from the listing's own fee snapshot, so a Buy Now
+   * buyer pays 0% and an AED 10 start buyer pays 6% — the matrix the client
+   * set, not a tier table. The seller's settlement reads the same snapshot,
+   * which is what lets the two sides of the order reconcile.
+   */
+  const feeConfig = await FeeEngineService.getAuthoritativeFeeConfig();
+  const feeSnapshot = FeeEngineService.resolveListingFeeSnapshot(
+    listing.auction ? { ...listing.auction, listing } : listing,
+    feeConfig,
+  );
+  const fees = FeeEngineService.calculateOrderFees({
+    snapshot: feeSnapshot,
+    salePrice: purchasePrice,
+    currency: QUOTE_CURRENCY,
+  });
+
+  const breakdown = calculateOrderTotals({
+    salePrice: purchasePrice,
+    buyerFee: fees.buyerFeeAmount,
     shippingPayer: listing.shippingPayer,
-    shippingCoverage: listing.shippingCoverage,
     destinationCountry,
-    buyerFeeConfig: feeConfigs.buyerFeeConfig,
     // The resolved rate replaces all three tiers: the tiering already happened
     // when the country rate was looked up.
     shippingConfig: {
-      ...feeConfigs.shippingConfig,
+      ...chargeConfigs.shippingConfig,
       domesticRate: shippingRate.rate,
       gccRate: shippingRate.rate,
       worldwideRate: shippingRate.rate,
     },
-    vatConfig: feeConfigs.vatConfig,
+    vatConfig: chargeConfigs.vatConfig,
   });
 
   // 15 free storage days apply; any accrued fee is collected on release, not
@@ -203,6 +223,7 @@ export async function buildOrderQuote(input: QuoteInput): Promise<OrderQuote> {
     storageSelected: Boolean(input.storageSelected),
     purchaseType,
     breakdown: quoteBreakdown,
+    fees,
     totalMinor,
     metadata: buildQuoteMetadata({
       orderNumber,
@@ -216,6 +237,7 @@ export async function buildOrderQuote(input: QuoteInput): Promise<OrderQuote> {
       storageSelected: Boolean(input.storageSelected),
       breakdown: quoteBreakdown,
       shippingAddress: input.shippingAddress,
+      fees,
     }),
   };
 }
@@ -238,6 +260,8 @@ export function buildQuoteMetadata(input: {
   storageSelected: boolean;
   breakdown: OrderQuote["breakdown"];
   shippingAddress: AddressPayload | null;
+  /** Recorded so a charge can be traced back to the rule that priced it. */
+  fees?: OrderFeeCalculation | null;
 }): Record<string, string> {
   return {
     orderNumber: input.orderNumber,
@@ -255,6 +279,14 @@ export function buildQuoteMetadata(input: {
     totalAmount: String(input.breakdown.totalAmount),
     storageSelected: String(input.storageSelected),
     destinationCountry: input.destinationCountry,
+    ...(input.fees
+      ? {
+          feeRuleType: input.fees.sellingMethod,
+          feeRuleVersion: input.fees.feeRuleVersion,
+          sellerFeePercent: String(input.fees.sellerFeeRate),
+          buyerFeePercent: String(input.fees.buyerFeeRate),
+        }
+      : {}),
     ...(input.shippingAddress ? { shippingAddress: JSON.stringify(input.shippingAddress) } : {}),
   };
 }

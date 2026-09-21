@@ -13,7 +13,7 @@ import { logger } from "../../core/logger.js";
 import { prisma } from "../../core/prisma.js";
 import { getStripeClient } from "./stripe.client.js";
 import { handleStripeEvent, isHandledStripeEvent } from "./stripeWebhook.handlers.js";
-import type { StripeWebhookIntakeResult, StripeWebhookStatus } from "./stripeWebhook.types.js";
+import type { StripeWebhookIntakeResult, StripeWebhookSource, StripeWebhookStatus } from "./stripeWebhook.types.js";
 
 /**
  * Verify the signature over the exact bytes Stripe sent.
@@ -23,7 +23,11 @@ import type { StripeWebhookIntakeResult, StripeWebhookStatus } from "./stripeWeb
  * unverifiable delivery is refused — the webhook secret is required by the
  * environment schema, so "not configured" cannot happen at runtime.
  */
-export function verifyStripeEvent(payloadBuffer: Buffer | undefined, signature: string | undefined): Stripe.Event {
+export function verifyStripeEvent(
+  payloadBuffer: Buffer | undefined,
+  signature: string | undefined,
+  source: StripeWebhookSource = "platform",
+): Stripe.Event {
   if (!signature) {
     throw new AppError(400, "Missing stripe-signature header", "WEBHOOK_SIGNATURE_MISSING");
   }
@@ -36,10 +40,24 @@ export function verifyStripeEvent(payloadBuffer: Buffer | undefined, signature: 
     );
   }
 
+  const env = loadEnv();
+  const secret = source === "connect" ? env.STRIPE_CONNECT_WEBHOOK_SECRET : env.STRIPE_WEBHOOK_SECRET;
+
+  if (!secret) {
+    // Refusing is the only safe answer. Accepting a Connect delivery with no
+    // secret to check it against would mean acting on an unverified claim
+    // that a seller's account is ready to be paid.
+    throw new AppError(
+      500,
+      "Connect webhooks are not configured: STRIPE_CONNECT_WEBHOOK_SECRET is unset.",
+      "WEBHOOK_SECRET_MISSING",
+    );
+  }
+
   try {
-    return getStripeClient().webhooks.constructEvent(payloadBuffer, signature, loadEnv().STRIPE_WEBHOOK_SECRET);
+    return getStripeClient().webhooks.constructEvent(payloadBuffer, signature, secret);
   } catch (error) {
-    logger.warn("Stripe signature verification failed", { error });
+    logger.warn("Stripe signature verification failed", { error, source });
     throw new AppError(400, "Webhook signature verification failed", "WEBHOOK_SIGNATURE_INVALID");
   }
 }
@@ -156,8 +174,9 @@ export async function processStoredStripeEvent(eventId: string): Promise<StripeW
 export async function ingestStripeWebhook(
   payloadBuffer: Buffer | undefined,
   signature: string | undefined,
+  source: StripeWebhookSource = "platform",
 ): Promise<StripeWebhookIntakeResult> {
-  const event = verifyStripeEvent(payloadBuffer, signature);
+  const event = verifyStripeEvent(payloadBuffer, signature, source);
   const { duplicate } = await recordIncomingEvent(event);
 
   if (duplicate) {

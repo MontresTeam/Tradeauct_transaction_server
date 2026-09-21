@@ -76,7 +76,42 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().min(1, "STRIPE_SECRET_KEY is required"),
   STRIPE_PUBLISHABLE_KEY: z.string().min(1, "STRIPE_PUBLISHABLE_KEY is required"),
   STRIPE_WEBHOOK_SECRET: z.string().min(1, "STRIPE_WEBHOOK_SECRET is required"),
+  /**
+   * Connect events are delivered to their own endpoint with their own secret.
+   * Optional so the server still boots before Connect is set up; the Connect
+   * webhook route refuses deliveries while it is unset rather than accepting
+   * unverifiable ones.
+   */
+  STRIPE_CONNECT_WEBHOOK_SECRET: z.string().optional(),
   STRIPE_API_VERSION: z.string().default("2025-02-24.acacia"),
+
+  /**
+   * The two hard gates on seller money movement.
+   *
+   * These are engineering kill switches, separate from the Super Admin
+   * toggles in SETTLEMENT_CONFIG. Both an env flag and its admin toggle must
+   * be on before anything moves; see the plan §8. They default off, so a
+   * production deploy that forgets to set them does nothing rather than
+   * something irreversible.
+   */
+  SELLER_CONNECT_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
+  SELLER_AUTO_TRANSFER_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
+  /** ISO country for connected accounts created by this platform. */
+  CONNECT_ACCOUNT_COUNTRY: z.string().length(2).default("AE"),
+  /**
+   * Payout schedule set on new connected accounts. "manual" gives TradeAuct
+   * one payout per settlement, which maps 1:1 but costs a payout fee each
+   * time; "daily" is cheaper but bundles settlements (plan Q4).
+   */
+  CONNECT_PAYOUT_INTERVAL: z.enum(["manual", "daily", "weekly", "monthly"]).default("manual"),
+  /** Where Stripe returns the seller after hosted onboarding. */
+  SELLER_DASHBOARD_URL: z.string().default("http://localhost:5174"),
 
   /** Service-to-service authentication (see core/security). */
   SERVICE_NAME: z.string().default("txn-server"),
@@ -103,6 +138,8 @@ const envSchema = z.object({
   TXN_EVENTS_QUEUE: z.string().default("txn-events"),
   TXN_COMMANDS_QUEUE: z.string().default("txn-commands"),
   STRIPE_WEBHOOK_QUEUE: z.string().default("stripe-webhooks"),
+  /** Repeatable settlement release, transfer and reconciliation jobs. */
+  SETTLEMENT_QUEUE: z.string().default("settlements"),
 
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   TRUST_PROXY: z

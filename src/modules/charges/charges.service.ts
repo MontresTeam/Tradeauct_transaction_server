@@ -17,9 +17,10 @@ import { logger } from "../../core/logger.js";
 import { currencyExponent, toMinorUnits, toStripeAmount } from "../../core/money.js";
 import { enqueueOutboxEvent, TXN_EVENTS } from "../../core/outbox.js";
 import { prisma } from "../../core/prisma.js";
+import { FeeEngineService } from "../fees/feeEngine.service.js";
 import { getStripeClient } from "../gateway/stripe.client.js";
 import { PaymentFinalizationService } from "../payments/payments.finalize.service.js";
-import { calculateLiveTotalBreakdown, getAuthoritativeFeeConfigs } from "../quote/buyerFee.utils.js";
+import { calculateOrderTotals, getAuthoritativeChargeConfigs } from "../quote/orderTotals.utils.js";
 import { buildQuoteMetadata, QUOTE_CURRENCY } from "../quote/quote.service.js";
 
 const RECOVERY_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -95,17 +96,27 @@ export class ChargeService {
     }
 
     const winningAmount = highestBid.amount;
-    const feeConfigs = await getAuthoritativeFeeConfigs();
+    const chargeConfigs = await getAuthoritativeChargeConfigs();
     const destinationCountry = "United Arab Emirates";
 
-    const breakdown = calculateLiveTotalBreakdown({
-      bidAmount: winningAmount,
+    // The auction's own fee snapshot decides the buyer premium. A reserve
+    // auction's winner pays 3%, an AED 10 start winner pays 6% - the same
+    // rule the seller's settlement will be calculated under.
+    const feeConfig = await FeeEngineService.getAuthoritativeFeeConfig();
+    const feeSnapshot = FeeEngineService.resolveListingFeeSnapshot({ ...auction, listing: auction.listing }, feeConfig);
+    const fees = FeeEngineService.calculateOrderFees({
+      snapshot: feeSnapshot,
+      salePrice: winningAmount,
+      currency: QUOTE_CURRENCY,
+    });
+
+    const breakdown = calculateOrderTotals({
+      salePrice: winningAmount,
+      buyerFee: fees.buyerFeeAmount,
       shippingPayer: auction.listing.shippingPayer || "BUYER",
-      shippingCoverage: auction.listing.shippingCoverage || "WORLDWIDE",
       destinationCountry,
-      buyerFeeConfig: feeConfigs.buyerFeeConfig,
-      shippingConfig: feeConfigs.shippingConfig,
-      vatConfig: feeConfigs.vatConfig,
+      shippingConfig: chargeConfigs.shippingConfig,
+      vatConfig: chargeConfigs.vatConfig,
     });
 
     const totals = {
@@ -157,6 +168,7 @@ export class ChargeService {
       storageSelected: false,
       breakdown: totals,
       shippingAddress: null,
+      fees,
     });
 
     try {
@@ -170,6 +182,7 @@ export class ChargeService {
           confirm: true,
           description: `TradeAuct Winner Payment: ${auction.listing.title}`,
           metadata,
+          transfer_group: `order_${metadata.orderNumber}`,
         },
         {
           // The attempt number is part of the key. The old key was fixed per
@@ -358,6 +371,9 @@ export class ChargeService {
             attemptNumber: String(attemptNo),
             isRecoveryRetry: "true",
           },
+          // Same group as the original attempt, so a retry that succeeds is
+          // still tied to the seller transfer that will follow it.
+          transfer_group: payment.transferGroup ?? `order_${payment.id}`,
         },
         { idempotencyKey: `retry:${payment.id}:${attemptNo}` },
       );

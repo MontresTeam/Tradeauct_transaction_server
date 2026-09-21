@@ -7,7 +7,7 @@
 
 import { AppError } from "../../core/errors/AppError.js";
 import { prisma } from "../../core/prisma.js";
-import { GCC_COUNTRY_IDENTIFIERS, UAE_COUNTRY_IDENTIFIERS } from "./buyerFee.utils.js";
+import { GCC_COUNTRY_IDENTIFIERS, UAE_COUNTRY_IDENTIFIERS } from "./orderTotals.utils.js";
 
 export interface CountryRateInput {
   countryCode: string;

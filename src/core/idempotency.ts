@@ -19,6 +19,18 @@ import { IDEMPOTENCY_HEADER } from "./security/signing.js";
 
 const DEFAULT_TTL_HOURS = 24;
 
+/**
+ * How long a claim may sit without a stored response before it is considered
+ * abandoned.
+ *
+ * It has to exceed the longest a request can legitimately run. The Stripe
+ * client is configured with a 20-second timeout and two network retries, so
+ * roughly a minute is the realistic ceiling; two minutes leaves room and still
+ * unblocks a buyer quickly. Stripe's own idempotency keys are the backstop if
+ * a takeover ever does overlap a live request.
+ */
+const IN_PROGRESS_LEASE_MS = 2 * 60 * 1000;
+
 export function requestHash(method: string, path: string, body: Buffer | string): string {
   return createHash("sha256").update(`${method.toUpperCase()}\n${path}\n`).update(body).digest("hex");
 }
@@ -66,13 +78,54 @@ export function idempotent(options: IdempotencyOptions): RequestHandler {
             return;
           }
 
-          // The first request is still running. Answering now would either
-          // duplicate the work or report a result we do not have yet.
-          throw new AppError(
-            409,
-            "A request with this Idempotency-Key is still in progress",
-            "IDEMPOTENCY_IN_PROGRESS",
-          );
+          /**
+           * A claim with no stored response. Either the first request is still
+           * running, or it died before it could release the key.
+           *
+           * The difference matters. Without a lease, a process that crashed
+           * mid-request left the key claimed for its whole 24-hour TTL, and
+           * every retry got a 409 — the buyer could not check out that listing
+           * again for a day. The release path is also best-effort: it runs
+           * after the response is sent, so a database that is refusing
+           * connections at that moment loses it entirely.
+           *
+           * So a claim older than the lease is treated as abandoned and taken
+           * over. The lease is longer than any request can legitimately take,
+           * and `updateMany` on the old `lockedAt` makes the takeover atomic:
+           * two racing retries produce exactly one winner.
+           */
+          const leaseAge = Date.now() - existing.lockedAt.getTime();
+
+          if (leaseAge < IN_PROGRESS_LEASE_MS) {
+            throw new AppError(
+              409,
+              "A request with this Idempotency-Key is still in progress",
+              "IDEMPOTENCY_IN_PROGRESS",
+            );
+          }
+
+          const takeover = await prisma.idempotencyKey.updateMany({
+            where: { scope, key, completedAt: null, lockedAt: existing.lockedAt },
+            data: { lockedAt: new Date() },
+          });
+
+          if (takeover.count === 0) {
+            throw new AppError(
+              409,
+              "A request with this Idempotency-Key is still in progress",
+              "IDEMPOTENCY_IN_PROGRESS",
+            );
+          }
+
+          logger.warn("Took over an abandoned idempotency claim", {
+            scope,
+            ageMs: leaseAge,
+            path: req.path,
+          });
+
+          captureResponse(req, res, scope, key);
+          next();
+          return;
         }
 
         try {

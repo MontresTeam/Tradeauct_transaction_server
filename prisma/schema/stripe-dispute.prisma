@@ -35,6 +35,11 @@ model StripeDispute {
   evidenceDueBy       DateTime?
   evidenceSubmittedAt DateTime?
   outcome             String?
+  /// When Stripe actually debited the platform balance, and when it gave the
+  /// money back. A dispute's money moves before its outcome is known, so
+  /// these are tracked separately from `status`.
+  fundsWithdrawnAt    DateTime?
+  fundsReinstatedAt   DateTime?
   closedAt            DateTime?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt

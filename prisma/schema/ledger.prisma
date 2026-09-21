@@ -28,6 +28,8 @@ enum LedgerAccount {
   STRIPE_FEES
   REFUNDS
   DISPUTES_RESERVE
+  /// A debt a seller owes back after they were already paid out.
+  SELLER_RECOVERABLE
 }
 
 enum LedgerDirection {
