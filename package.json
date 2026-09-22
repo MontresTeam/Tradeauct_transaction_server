@@ -27,7 +27,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "// --- Stripe Tooling ---": "",
-    "stripe:listen": "stripe listen --forward-to localhost:9100/webhooks/stripe --forward-connect-to localhost:9100/webhooks/stripe/connect",
+    "stripe:listen": "stripe listen --forward-to localhost:9101/webhooks/stripe --forward-connect-to localhost:9101/webhooks/stripe/connect",
     "smoke": "tsx scripts/smoke-internal.ts"
   },
   "dependencies": {

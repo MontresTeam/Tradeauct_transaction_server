@@ -295,6 +295,51 @@ export async function refreshConnectAccount(sellerId: string): Promise<ConnectSt
   return getConnectStatus(sellerId);
 }
 
+export type BankAccountView = {
+  id: string;
+  bankName: string | null;
+  last4: string;
+  currency: string;
+  country: string | null;
+  accountHolderName: string | null;
+  /** Stripe's own verification state: "new" | "validated" | "verified" | "errored". */
+  status: string;
+  isDefault: boolean;
+};
+
+/**
+ * The seller's bank account, as Stripe holds it.
+ *
+ * Custom connected accounts are created and owned by the platform, so the
+ * platform's API key can read this - unlike Standard or Express accounts,
+ * where the seller's own dashboard would be the only place to see it. Nothing
+ * here is ever written by TradeAuct: this is read-only, and "update" sends the
+ * seller back through a Stripe-hosted Account Link (see `createAccountLink`),
+ * never a local form. TradeAuct does not store bank details at all.
+ */
+export async function getConnectedBankAccounts(sellerId: string): Promise<BankAccountView[]> {
+  const account = await prisma.connectAccount.findUnique({ where: { sellerId } });
+  if (!account) return [];
+
+  const externalAccounts = await getStripeClient().accounts.listExternalAccounts(account.stripeAccountId, {
+    object: "bank_account",
+    limit: 10,
+  });
+
+  return externalAccounts.data
+    .filter((ext): ext is Stripe.BankAccount => ext.object === "bank_account")
+    .map((bank) => ({
+      id: bank.id,
+      bankName: bank.bank_name ?? null,
+      last4: bank.last4,
+      currency: bank.currency.toUpperCase(),
+      country: bank.country ?? null,
+      accountHolderName: bank.account_holder_name ?? null,
+      status: bank.status,
+      isDefault: bank.default_for_currency ?? false,
+    }));
+}
+
 /** True when a transfer to this seller would be accepted. */
 export async function isPayoutReady(
   sellerId: string,

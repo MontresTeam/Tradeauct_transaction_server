@@ -18,6 +18,7 @@ import { FINANCE_PERMISSIONS } from "../settlements/settlement.routes.js";
 import {
   createAccountLink,
   createConnectedAccount,
+  getConnectedBankAccounts,
   getConnectStatus,
   refreshConnectAccount,
 } from "./connect.service.js";
@@ -111,6 +112,23 @@ export function createConnectRouter(security: Security): Router {
             "A UAE payout account requires a valid UAE trade licence. Individuals without one cannot currently be onboarded; those sellers are paid by manual bank transfer instead.",
         },
       });
+    }),
+  );
+
+  /**
+   * The seller's own bank account, exactly as Stripe holds it.
+   *
+   * Read-only. There is no matching PUT: a seller who needs to change their
+   * bank goes back through `/sellers/stripe/onboarding`, Stripe's own hosted
+   * flow, because TradeAuct never takes bank details itself.
+   */
+  router.get(
+    "/sellers/stripe/bank-account",
+    security.requireActor,
+    asyncHandler(async (req: Request, res: Response) => {
+      const seller = await resolveSeller(req);
+      const accounts = await getConnectedBankAccounts(seller.id);
+      res.json({ success: true, data: accounts });
     }),
   );
 

@@ -24,6 +24,25 @@ async function startServer(): Promise<void> {
   await assertDatabaseConnection();
   await initQueue();
 
+  /**
+   * A bind failure (EADDRINUSE, EACCES, ...) is an `error` event on the
+   * `Server` instance, not a rejected promise — `server.listen()` returns
+   * before the port is actually claimed. With no listener here, Node throws
+   * it as an uncaught exception and the process dies immediately, skipping
+   * `shutdown()` entirely: the Prisma pool from `assertDatabaseConnection()`
+   * and the Redis connection from `initQueue()` above are never released.
+   *
+   * That is not hypothetical - it is exactly how a second `npm run dev`
+   * against an already-running instance leaks a handful of connections into
+   * a database with a 25-connection ceiling shared with another service.
+   * Closing them here before exiting is what makes a failed start harmless
+   * rather than a small, silent leak every time it happens.
+   */
+  server.once("error", (error: NodeJS.ErrnoException) => {
+    logger.error("Transaction server failed to bind", { code: error.code, port: env.PORT, host: env.HOST, error });
+    void Promise.allSettled([closeQueues(), prisma.$disconnect()]).finally(() => process.exit(1));
+  });
+
   server.listen(env.PORT, env.HOST, () => {
     // Must run after initQueue: it reuses that Redis connection.
     initStripeWebhookWorker();
@@ -41,7 +60,9 @@ async function startServer(): Promise<void> {
 
 startServer().catch((error) => {
   logger.error("Transaction server failed to start", { error });
-  process.exit(1);
+  // Same leak, earlier in the sequence: a rejection here (a bad DATABASE_URL,
+  // Redis unreachable) can still follow a successful partial connection.
+  void Promise.allSettled([closeQueues(), prisma.$disconnect()]).finally(() => process.exit(1));
 });
 
 let shuttingDown = false;

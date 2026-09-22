@@ -237,6 +237,41 @@ export function createSettlementRouter(security: Security): Router {
     }),
   );
 
+  /**
+   * The settlement for one fulfilment order.
+   *
+   * The order detail page shows the automatic-payout state inline rather than
+   * sending the seller to a separate tab to find it. There is no settlement
+   * yet for an order whose payment has not been recorded against a
+   * fulfilment order (the settlement exists from the moment of payment, but
+   * `linkFulfillmentOrder` runs slightly later) - that is a 404, not an
+   * error, and the page shows "not yet available" rather than a failure.
+   */
+  router.get(
+    "/seller/settlements/by-order/:fulfillmentOrderId",
+    security.requireActor,
+    validate({ params: z.object({ fulfillmentOrderId: identifier }).strict() }),
+    asyncHandler(async (req: Request, res: Response) => {
+      const sellerId = await resolveSellerId(req);
+      const settlement = await prisma.sellerSettlement.findFirst({
+        where: { fulfillmentOrderId: String(req.params.fulfillmentOrderId), sellerId },
+        include: { fulfillmentOrder: { select: { orderNumber: true, listingId: true } } },
+      });
+
+      if (!settlement) {
+        throw new AppError(404, "No settlement for this order yet", "SETTLEMENT_NOT_FOUND");
+      }
+
+      res.json({
+        success: true,
+        data: {
+          ...presentSettlement(settlement),
+          orderNumber: settlement.fulfillmentOrder?.orderNumber ?? null,
+        },
+      });
+    }),
+  );
+
   router.get(
     "/seller/settlements/:settlementId",
     security.requireActor,
