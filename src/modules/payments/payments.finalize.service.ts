@@ -113,6 +113,10 @@ export class PaymentFinalizationService {
       select: { id: true, status: true, listingId: true },
     });
 
+    // Cheap pre-check for the common case. Stripe fires payment_intent.succeeded
+    // and checkout.session.completed for the same intent within milliseconds
+    // of each other, so this alone does not close the race - the atomic claim
+    // inside the transaction below is what actually does that.
     if (existing?.status === "PAID") {
       return { status: "ALREADY_SETTLED", paymentId: existing.id };
     }
@@ -169,164 +173,204 @@ export class PaymentFinalizationService {
       typeof intent.latest_charge === "string" ? intent.latest_charge : (intent.latest_charge?.id ?? null);
     const transferGroup = intent.transfer_group ?? `order_${orderNumber}`;
 
-    const paymentId = await prisma.$transaction(async (tx) => {
-      const payment = await tx.payment.upsert({
-        where: { listingId },
-        update: {
-          status: "PAID",
-          buyerId: buyer.id,
-          amount: total,
-          amountMinor: breakdown.totalMinor,
-          currency,
-          currencyExponent: currencyExponent(currency),
-          gateway: "STRIPE",
-          stripePaymentIntentId: paymentIntentId,
-          gatewayTransactionId: paymentIntentId,
-          stripeChargeId,
-          transferGroup,
-          paymentRecoveryStatus: "RECOVERED",
-          paidAt: new Date(),
-        },
-        create: {
+    let claimResult: { paymentId: string; alreadySettled: boolean };
+    try {
+      claimResult = await prisma.$transaction(async (tx) => {
+        // Atomic claim: only the call that actually flips the row out of
+        // "not PAID" gets to post the ledger, create the settlement, and
+        // enqueue the outbox event below. A concurrent settle for the same
+        // intent (payment_intent.succeeded and checkout.session.completed
+        // routinely land within a second of each other) will see count 0
+        // here - either because it lost the race on an existing row or
+        // because it lost the race on the create below - and must back off
+        // instead of re-running those side effects.
+        const claim = await tx.payment.updateMany({
+          where: { listingId, status: { not: "PAID" } },
+          data: {
+            status: "PAID",
+            buyerId: buyer.id,
+            amount: total,
+            amountMinor: breakdown.totalMinor,
+            currency,
+            currencyExponent: currencyExponent(currency),
+            gateway: "STRIPE",
+            stripePaymentIntentId: paymentIntentId,
+            gatewayTransactionId: paymentIntentId,
+            stripeChargeId,
+            transferGroup,
+            paymentRecoveryStatus: "RECOVERED",
+            paidAt: new Date(),
+          },
+        });
+
+        let payment: { id: string };
+        if (claim.count === 1) {
+          payment = await tx.payment.findUniqueOrThrow({ where: { listingId }, select: { id: true } });
+        } else {
+          const found = await tx.payment.findUnique({ where: { listingId }, select: { id: true, status: true } });
+          if (found) {
+            // Already PAID by a concurrent settle call for the same intent.
+            return { paymentId: found.id, alreadySettled: true };
+          }
+          // First time this listing is seen at all. A concurrent create on
+          // the same unique listingId throws P2002, caught below.
+          payment = await tx.payment.create({
+            data: {
+              listingId,
+              buyerId: buyer.id,
+              auctionId: meta.auctionId ? String(meta.auctionId) : null,
+              amount: total,
+              amountMinor: breakdown.totalMinor,
+              currency,
+              currencyExponent: currencyExponent(currency),
+              gateway: "STRIPE",
+              status: "PAID",
+              stripePaymentIntentId: paymentIntentId,
+              gatewayTransactionId: paymentIntentId,
+              stripeChargeId,
+              transferGroup,
+              paidAt: new Date(),
+            },
+          });
+        }
+
+        const attemptNo = await nextAttemptNumber(tx, payment.id);
+        await tx.paymentAttempt.upsert({
+          where: { idempotencyKey: `settle:${paymentIntentId}` },
+          update: { status: "SUCCEEDED", amountMinor: breakdown.totalMinor, currency },
+          create: {
+            paymentId: payment.id,
+            attemptNo,
+            stripePaymentIntentId: paymentIntentId,
+            status: "SUCCEEDED",
+            amountMinor: breakdown.totalMinor,
+            currency,
+            idempotencyKey: `settle:${paymentIntentId}`,
+          },
+        });
+  
+        // Cash in, obligations out. Debits equal credits by construction,
+        // because the components were just checked to sum to the captured
+        // amount.
+        await postTransaction(
+          {
+            kind: "CHARGE",
+            referenceType: "PAYMENT",
+            referenceId: payment.id,
+            currency,
+            description: `Stripe charge ${paymentIntentId}`,
+            lines: [
+              { account: "STRIPE_CASH", direction: "DEBIT", amountMinor: breakdown.totalMinor, paymentId: payment.id },
+              ...(breakdown.purchasePriceMinor > 0n
+                ? [
+                    {
+                      account: "SELLER_PAYABLE" as const,
+                      direction: "CREDIT" as const,
+                      amountMinor: breakdown.purchasePriceMinor,
+                      sellerId: listing.sellerId,
+                      paymentId: payment.id,
+                    },
+                  ]
+                : []),
+              ...(breakdown.buyerFeeMinor > 0n
+                ? [
+                    {
+                      account: "PLATFORM_FEE_REVENUE" as const,
+                      direction: "CREDIT" as const,
+                      amountMinor: breakdown.buyerFeeMinor,
+                      paymentId: payment.id,
+                    },
+                  ]
+                : []),
+              ...(breakdown.shippingMinor + breakdown.storageMinor > 0n
+                ? [
+                    {
+                      account: "SHIPPING_REVENUE" as const,
+                      direction: "CREDIT" as const,
+                      amountMinor: breakdown.shippingMinor + breakdown.storageMinor,
+                      paymentId: payment.id,
+                    },
+                  ]
+                : []),
+              ...(breakdown.vatMinor > 0n
+                ? [
+                    {
+                      account: "VAT_PAYABLE" as const,
+                      direction: "CREDIT" as const,
+                      amountMinor: breakdown.vatMinor,
+                      paymentId: payment.id,
+                    },
+                  ]
+                : []),
+            ],
+          },
+          tx,
+        );
+  
+        // The seller's settlement is created here, inside the same transaction
+        // as the charge posting, so a paid order can never exist without one.
+        // It starts PENDING: nothing moves to the seller until the item has been
+        // delivered and the protection period has run.
+        await createSettlementForPayment(
+          {
+            paymentId: payment.id,
+            sellerId: listing.sellerId,
+            listingId,
+            salePrice: minorToMajor(breakdown.purchasePriceMinor, currency),
+            currency,
+            estimatedShipping: minorToMajor(breakdown.shippingMinor, currency),
+          },
+          tx,
+        );
+  
+        // Written in the same transaction as the money, so the main server can
+        // never be told about a payment that was rolled back.
+        await enqueueOutboxEvent(tx, TXN_EVENTS.PAYMENT_SUCCEEDED, {
+          paymentId: payment.id,
+          paymentIntentId,
           listingId,
-          buyerId: buyer.id,
           auctionId: meta.auctionId ? String(meta.auctionId) : null,
-          amount: total,
-          amountMinor: breakdown.totalMinor,
-          currency,
-          currencyExponent: currencyExponent(currency),
-          gateway: "STRIPE",
-          status: "PAID",
-          stripePaymentIntentId: paymentIntentId,
-          gatewayTransactionId: paymentIntentId,
-          stripeChargeId,
-          transferGroup,
-          paidAt: new Date(),
-        },
-      });
-
-      const attemptNo = await nextAttemptNumber(tx, payment.id);
-      await tx.paymentAttempt.upsert({
-        where: { idempotencyKey: `settle:${paymentIntentId}` },
-        update: { status: "SUCCEEDED", amountMinor: breakdown.totalMinor, currency },
-        create: {
-          paymentId: payment.id,
-          attemptNo,
-          stripePaymentIntentId: paymentIntentId,
-          status: "SUCCEEDED",
-          amountMinor: breakdown.totalMinor,
-          currency,
-          idempotencyKey: `settle:${paymentIntentId}`,
-        },
-      });
-
-      // Cash in, obligations out. Debits equal credits by construction,
-      // because the components were just checked to sum to the captured
-      // amount.
-      await postTransaction(
-        {
-          kind: "CHARGE",
-          referenceType: "PAYMENT",
-          referenceId: payment.id,
-          currency,
-          description: `Stripe charge ${paymentIntentId}`,
-          lines: [
-            { account: "STRIPE_CASH", direction: "DEBIT", amountMinor: breakdown.totalMinor, paymentId: payment.id },
-            ...(breakdown.purchasePriceMinor > 0n
-              ? [
-                  {
-                    account: "SELLER_PAYABLE" as const,
-                    direction: "CREDIT" as const,
-                    amountMinor: breakdown.purchasePriceMinor,
-                    sellerId: listing.sellerId,
-                    paymentId: payment.id,
-                  },
-                ]
-              : []),
-            ...(breakdown.buyerFeeMinor > 0n
-              ? [
-                  {
-                    account: "PLATFORM_FEE_REVENUE" as const,
-                    direction: "CREDIT" as const,
-                    amountMinor: breakdown.buyerFeeMinor,
-                    paymentId: payment.id,
-                  },
-                ]
-              : []),
-            ...(breakdown.shippingMinor + breakdown.storageMinor > 0n
-              ? [
-                  {
-                    account: "SHIPPING_REVENUE" as const,
-                    direction: "CREDIT" as const,
-                    amountMinor: breakdown.shippingMinor + breakdown.storageMinor,
-                    paymentId: payment.id,
-                  },
-                ]
-              : []),
-            ...(breakdown.vatMinor > 0n
-              ? [
-                  {
-                    account: "VAT_PAYABLE" as const,
-                    direction: "CREDIT" as const,
-                    amountMinor: breakdown.vatMinor,
-                    paymentId: payment.id,
-                  },
-                ]
-              : []),
-          ],
-        },
-        tx,
-      );
-
-      // The seller's settlement is created here, inside the same transaction
-      // as the charge posting, so a paid order can never exist without one.
-      // It starts PENDING: nothing moves to the seller until the item has been
-      // delivered and the protection period has run.
-      await createSettlementForPayment(
-        {
-          paymentId: payment.id,
+          buyerId: buyer.id,
+          buyerUserId: meta.buyerUserId ? String(meta.buyerUserId) : null,
           sellerId: listing.sellerId,
-          listingId,
-          salePrice: minorToMajor(breakdown.purchasePriceMinor, currency),
+          orderNumber,
           currency,
-          estimatedShipping: minorToMajor(breakdown.shippingMinor, currency),
-        },
-        tx,
-      );
-
-      // Written in the same transaction as the money, so the main server can
-      // never be told about a payment that was rolled back.
-      await enqueueOutboxEvent(tx, TXN_EVENTS.PAYMENT_SUCCEEDED, {
-        paymentId: payment.id,
-        paymentIntentId,
-        listingId,
-        auctionId: meta.auctionId ? String(meta.auctionId) : null,
-        buyerId: buyer.id,
-        buyerUserId: meta.buyerUserId ? String(meta.buyerUserId) : null,
-        sellerId: listing.sellerId,
-        orderNumber,
-        currency,
-        amountMinor: breakdown.totalMinor.toString(),
-        // The fulfilment half of the old finalizeSuccessfulPayment needs the
-        // same numbers, so they travel with the event rather than being
-        // re-derived from metadata on the other side.
-        breakdown: {
-          purchasePrice: minorToMajor(breakdown.purchasePriceMinor, currency),
-          buyerFee: minorToMajor(breakdown.buyerFeeMinor, currency),
-          shippingCost: minorToMajor(breakdown.shippingMinor, currency),
-          storageFee: minorToMajor(breakdown.storageMinor, currency),
-          taxAmount: minorToMajor(breakdown.vatMinor, currency),
-          totalAmount: total,
-        },
-        purchaseType: meta.purchaseType ? String(meta.purchaseType) : listing.saleType,
-        storageSelected: meta.storageSelected === "true" || meta.storageSelected === true,
-        destinationCountry: meta.destinationCountry ? String(meta.destinationCountry) : null,
-        shippingAddress: parseAddress(meta.shippingAddress),
-        source,
+          amountMinor: breakdown.totalMinor.toString(),
+          // The fulfilment half of the old finalizeSuccessfulPayment needs the
+          // same numbers, so they travel with the event rather than being
+          // re-derived from metadata on the other side.
+          breakdown: {
+            purchasePrice: minorToMajor(breakdown.purchasePriceMinor, currency),
+            buyerFee: minorToMajor(breakdown.buyerFeeMinor, currency),
+            shippingCost: minorToMajor(breakdown.shippingMinor, currency),
+            storageFee: minorToMajor(breakdown.storageMinor, currency),
+            taxAmount: minorToMajor(breakdown.vatMinor, currency),
+            totalAmount: total,
+          },
+          purchaseType: meta.purchaseType ? String(meta.purchaseType) : listing.saleType,
+          storageSelected: meta.storageSelected === "true" || meta.storageSelected === true,
+          destinationCountry: meta.destinationCountry ? String(meta.destinationCountry) : null,
+          shippingAddress: parseAddress(meta.shippingAddress),
+          source,
+        });
+  
+      return { paymentId: payment.id, alreadySettled: false };
       });
+    } catch (error) {
+      if ((error as { code?: string }).code === "P2002") {
+        // Lost the race to create the row. The winner already did (or is
+        // doing) the settle; report the same outcome without repeating it.
+        const settled = await prisma.payment.findUniqueOrThrow({ where: { listingId }, select: { id: true } });
+        return { status: "ALREADY_SETTLED", paymentId: settled.id };
+      }
+      throw error;
+    }
 
-      return payment.id;
-    });
+    if (claimResult.alreadySettled) {
+      return { status: "ALREADY_SETTLED", paymentId: claimResult.paymentId };
+    }
+
+    const paymentId = claimResult.paymentId;
 
     await recordAudit({
       actorType: "SYSTEM",
