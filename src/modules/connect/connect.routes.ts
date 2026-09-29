@@ -23,10 +23,20 @@ import {
   refreshConnectAccount,
 } from "./connect.service.js";
 
+/** Signed link to the registration trade licence, added by the main backend. */
+const tradeLicenseDocumentUrl = z.string().url().max(4000).optional();
+
 const onboardingBody = z
   .object({
     returnPath: z.string().max(300).optional(),
     refreshPath: z.string().max(300).optional(),
+    tradeLicenseDocumentUrl,
+  })
+  .strict();
+
+const connectBody = z
+  .object({
+    tradeLicenseDocumentUrl,
   })
   .strict();
 
@@ -62,11 +72,13 @@ export function createConnectRouter(security: Security): Router {
     "/sellers/stripe/connect",
     security.requireActor,
     idempotent({ scope: "connect-account" }),
+    validate({ body: connectBody }),
     asyncHandler(async (req: Request, res: Response) => {
       const seller = await resolveSeller(req);
       const result = await createConnectedAccount({
         sellerId: seller.id,
         email: seller.email,
+        tradeLicenseDocumentUrl: (req.body as z.infer<typeof connectBody>).tradeLicenseDocumentUrl ?? null,
         actorId: req.actor?.userId ?? null,
         ip: req.ip ?? null,
       });
@@ -87,10 +99,12 @@ export function createConnectRouter(security: Security): Router {
     validate({ body: onboardingBody }),
     asyncHandler(async (req: Request, res: Response) => {
       const seller = await resolveSeller(req);
+      const body = req.body as z.infer<typeof onboardingBody>;
       const link = await createAccountLink({
         sellerId: seller.id,
-        returnPath: req.body?.returnPath,
-        refreshPath: req.body?.refreshPath,
+        returnPath: body.returnPath,
+        refreshPath: body.refreshPath,
+        tradeLicenseDocumentUrl: body.tradeLicenseDocumentUrl ?? null,
       });
 
       res.json({ success: true, data: link });

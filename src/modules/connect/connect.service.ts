@@ -122,6 +122,163 @@ export async function syncConnectAccount(account: Stripe.Account): Promise<void>
   });
 }
 
+/** `+971 50 123 4567`, `00971501234567` → `+971501234567`; anything else → undefined. */
+function toE164(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  const compact = raw.replace(/[\s\-().]/g, "").replace(/^00/, "+");
+  return /^\+[1-9]\d{7,14}$/.test(compact) ? compact : undefined;
+}
+
+type SellerForPrefill = {
+  businessProfile: {
+    legalBusinessName: string | null;
+    businessName: string | null;
+    tradeLicenseNumber: string | null;
+    vatNumber: string | null;
+  } | null;
+  businessContact: { businessPhone: string } | null;
+  addresses: {
+    isDefault: boolean;
+    addressType: string;
+    addressLine1: string;
+    addressLine2: string | null;
+    city: string;
+    state: string;
+    postalCode: string;
+    country: { code: string } | null;
+  }[];
+};
+
+/**
+ * Company details the seller already gave during business registration, so
+ * Stripe's hosted onboarding asks for less. Every field is optional and only
+ * sent when it looks valid: one malformed value would make Stripe refuse the
+ * whole account. Stripe still verifies all of it; this only saves typing.
+ */
+function companyPrefill(seller: SellerForPrefill, country: string): Stripe.AccountCreateParams.Company {
+  const profile = seller.businessProfile;
+  const address =
+    seller.addresses.find((a) => a.addressType === "REGISTERED_OFFICE") ??
+    seller.addresses.find((a) => a.isDefault) ??
+    seller.addresses[0];
+  // Only an address in the account's own country; a foreign one would be refused.
+  const usableAddress = address && (!address.country || address.country.code === country) ? address : undefined;
+  const trimmed = (value: string | null | undefined) => value?.trim() || undefined;
+
+  return {
+    name: trimmed(profile?.legalBusinessName) ?? trimmed(profile?.businessName),
+    registration_number: trimmed(profile?.tradeLicenseNumber),
+    tax_id: trimmed(profile?.vatNumber),
+    phone: toE164(seller.businessContact?.businessPhone),
+    ...(usableAddress
+      ? {
+          address: {
+            line1: trimmed(usableAddress.addressLine1),
+            line2: trimmed(usableAddress.addressLine2),
+            city: trimmed(usableAddress.city),
+            state: trimmed(usableAddress.state),
+            postal_code: trimmed(usableAddress.postalCode),
+            country,
+          },
+        }
+      : {}),
+  };
+}
+
+const STRIPE_DOCUMENT_TYPES: Record<string, string> = {
+  "application/pdf": "pdf",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+};
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024; // Stripe's limit for identity documents
+
+function sniffDocumentType(data: Buffer): string | undefined {
+  if (data.subarray(0, 4).toString("latin1") === "%PDF") return "application/pdf";
+  if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return "image/jpeg";
+  if (data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  return undefined;
+}
+
+const COMPANY_LICENSE_REQUIREMENT = "documents.company_license.files";
+
+/**
+ * Hand the trade licence the seller uploaded at registration to Stripe, so
+ * hosted onboarding does not ask for it again.
+ *
+ * Called both when the connected account is first created and every time the
+ * seller asks for a fresh onboarding link ("Continue verification") — the
+ * first attempt is not the only chance: the seller may not have had a licence
+ * on file yet, or the earlier upload may have failed. `requirements` is
+ * Stripe's live view of that account, so a licence Stripe already has is
+ * never re-uploaded.
+ *
+ * Best effort throughout: any failure is logged and onboarding carries on.
+ * Stripe then simply asks the seller to upload the licence on its own page.
+ *
+ * The URL arrives from the main backend, but it is still fetched from a
+ * payment server, so only HTTPS links to S3 are accepted.
+ */
+async function ensureTradeLicense(
+  stripeAccountId: string,
+  sellerId: string,
+  documentUrl: string | null | undefined,
+  requirements: Stripe.Account.Requirements | null | undefined,
+): Promise<void> {
+  if (!documentUrl) return;
+
+  const stillNeeded = [...(requirements?.currently_due ?? []), ...(requirements?.past_due ?? [])].includes(
+    COMPANY_LICENSE_REQUIREMENT,
+  );
+  if (!stillNeeded) return;
+
+  try {
+    const url = new URL(documentUrl);
+    if (url.protocol !== "https:" || !url.hostname.endsWith(".amazonaws.com")) {
+      logger.warn("Trade licence not sent to Stripe: not an S3 link", { sellerId, host: url.hostname });
+      return;
+    }
+
+    const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) {
+      logger.warn("Trade licence not sent to Stripe: download failed", { sellerId, status: response.status });
+      return;
+    }
+
+    const data = Buffer.from(await response.arrayBuffer());
+    // Uploads are sometimes stored as application/octet-stream, so fall back
+    // to the file's own signature.
+    const headerType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    const contentType = STRIPE_DOCUMENT_TYPES[headerType] ? headerType : sniffDocumentType(data);
+    const extension = contentType ? STRIPE_DOCUMENT_TYPES[contentType] : undefined;
+    if (!contentType || !extension) {
+      logger.warn("Trade licence not sent to Stripe: unsupported file type", { sellerId, headerType });
+      return;
+    }
+
+    if (data.length > MAX_DOCUMENT_BYTES) {
+      logger.warn("Trade licence not sent to Stripe: file too large", { sellerId, bytes: data.length });
+      return;
+    }
+
+    const stripe = getStripeClient();
+    const file = await stripe.files.create({
+      purpose: "account_requirement",
+      file: { data, name: `trade-licence.${extension}`, type: contentType },
+    });
+    await stripe.accounts.update(stripeAccountId, {
+      documents: { company_license: { files: [file.id] } },
+    });
+
+    logger.info("Trade licence sent to Stripe", { sellerId, stripeAccountId, fileId: file.id });
+  } catch (error) {
+    logger.warn("Trade licence not sent to Stripe", {
+      sellerId,
+      stripeAccountId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 /**
  * Create the seller's connected account, or return the one they already have.
  *
@@ -132,6 +289,7 @@ export async function syncConnectAccount(account: Stripe.Account): Promise<void>
 export async function createConnectedAccount(input: {
   sellerId: string;
   email?: string | null;
+  tradeLicenseDocumentUrl?: string | null;
   actorId?: string | null;
   ip?: string | null;
 }): Promise<{ stripeAccountId: string; created: boolean }> {
@@ -144,7 +302,13 @@ export async function createConnectedAccount(input: {
 
   const seller = await prisma.seller.findUnique({
     where: { id: input.sellerId },
-    include: { businessProfile: true, individualProfile: true, user: { select: { email: true } } },
+    include: {
+      businessProfile: true,
+      businessContact: true,
+      individualProfile: true,
+      user: { select: { email: true } },
+      addresses: { where: { isActive: true }, include: { country: true } },
+    },
   });
 
   if (!seller) {
@@ -152,39 +316,80 @@ export async function createConnectedAccount(input: {
   }
 
   const env = loadEnv();
+  const businessType = seller.sellerType === "INDIVIDUAL" ? "individual" : "company";
+
+  // Stripe refuses `individual` accounts in the UAE outright. Say so here
+  // rather than surfacing Stripe's refusal as a 500.
+  if (businessType === "individual" && env.CONNECT_ACCOUNT_COUNTRY === "AE") {
+    throw new AppError(
+      422,
+      "Automatic payouts need a UAE trade licence, so individual sellers are paid by bank transfer instead.",
+      "CONNECT_INDIVIDUAL_UNSUPPORTED",
+    );
+  }
+
   const businessName =
     seller.businessProfile?.legalBusinessName ||
     seller.businessProfile?.businessName ||
     seller.individualProfile?.storeName ||
     undefined;
 
-  const account = await getStripeClient().accounts.create(
-    {
-      type: "custom",
-      country: env.CONNECT_ACCOUNT_COUNTRY,
-      email: input.email ?? seller.user?.email ?? undefined,
-      capabilities: { transfers: { requested: true } },
-      business_type: seller.sellerType === "INDIVIDUAL" ? "individual" : "company",
-      business_profile: {
-        name: businessName,
-        url: seller.businessProfile?.website ?? undefined,
-        product_description: "Pre-owned luxury watches sold through the TradeAuct marketplace",
-      },
-      settings: {
-        payouts: {
-          // Manual by default: TradeAuct decides when money leaves the
-          // connected account, which keeps a payout matched 1:1 to a
-          // settlement. Switching this to daily is cheaper but bundles them
-          // (plan Q4).
-          schedule: { interval: env.CONNECT_PAYOUT_INTERVAL },
+  const company = businessType === "company" ? companyPrefill(seller, env.CONNECT_ACCOUNT_COUNTRY) : undefined;
+
+  // Stripe stores the response to an idempotency key for 24 hours, errors
+  // included. A key fixed on the seller alone therefore replays an old refusal
+  // (e.g. before Connect was enabled) long after the cause is fixed. The
+  // 10-minute window still collapses a double click into one account.
+  const idempotencyWindow = Math.floor(Date.now() / (10 * 60 * 1000));
+  const idempotencyKey = `tradeauct_connect_account_${input.sellerId}_${businessType}_${idempotencyWindow}`;
+
+  let account: Stripe.Account;
+  try {
+    account = await getStripeClient().accounts.create(
+      {
+        type: "custom",
+        country: env.CONNECT_ACCOUNT_COUNTRY,
+        email: input.email ?? seller.user?.email ?? undefined,
+        capabilities: { transfers: { requested: true } },
+        business_type: businessType,
+        ...(company ? { company } : {}),
+        business_profile: {
+          name: businessName,
+          url: seller.businessProfile?.website ?? undefined,
+          product_description: "Pre-owned luxury watches sold through the TradeAuct marketplace",
         },
+        settings: {
+          payouts: {
+            // Manual by default: TradeAuct decides when money leaves the
+            // connected account, which keeps a payout matched 1:1 to a
+            // settlement. Switching this to daily is cheaper but bundles them
+            // (plan Q4).
+            schedule: { interval: env.CONNECT_PAYOUT_INTERVAL },
+          },
+        },
+        metadata: { tradeauctSellerId: input.sellerId },
       },
-      metadata: { tradeauctSellerId: input.sellerId },
-    },
-    // Keyed on the seller: a retried onboarding click cannot create a second
-    // connected account for the same person.
-    { idempotencyKey: `tradeauct_connect_account_${input.sellerId}` },
-  );
+      { idempotencyKey },
+    );
+  } catch (error) {
+    const stripeError = error as { type?: string; code?: string; message?: string };
+    if (stripeError?.type === "StripeInvalidRequestError" || stripeError?.type === "StripePermissionError") {
+      // A configuration or eligibility refusal: retrying will not help. Log
+      // Stripe's words for us; give the seller something they can act on.
+      logger.error("Stripe refused to create a connected account", {
+        sellerId: input.sellerId,
+        businessType,
+        code: stripeError.code,
+        message: stripeError.message,
+      });
+      throw new AppError(
+        502,
+        "Payout accounts are temporarily unavailable. Please try again later or contact TradeAuct support.",
+        "CONNECT_ACCOUNT_REJECTED",
+      );
+    }
+    throw error;
+  }
 
   await prisma.connectAccount.create({
     data: {
@@ -211,6 +416,10 @@ export async function createConnectedAccount(input: {
     after: { sellerId: input.sellerId, stripeAccountId: account.id },
   });
 
+  if (businessType === "company") {
+    await ensureTradeLicense(account.id, input.sellerId, input.tradeLicenseDocumentUrl, account.requirements);
+  }
+
   logger.info("Connected account created", { sellerId: input.sellerId, stripeAccountId: account.id });
   return { stripeAccountId: account.id, created: true };
 }
@@ -225,6 +434,8 @@ export async function createAccountLink(input: {
   sellerId: string;
   returnPath?: string;
   refreshPath?: string;
+  /** A licence uploaded since the account was created, or a retry of one that failed before. */
+  tradeLicenseDocumentUrl?: string | null;
 }): Promise<{ url: string; expiresAt: Date }> {
   assertConnectEnabled();
 
@@ -232,6 +443,14 @@ export async function createAccountLink(input: {
   if (!account) {
     throw new AppError(404, "This seller has no payout account yet", "CONNECT_ACCOUNT_NOT_FOUND");
   }
+
+  // Stripe's live requirements, not the cached copy: a missed webhook must not
+  // cause a licence Stripe still needs to go unsent, or a spent one to be
+  // re-uploaded. This also keeps `connect_accounts` fresh on every "Continue
+  // verification" click, not just when a webhook happens to arrive.
+  const live = await getStripeClient().accounts.retrieve(account.stripeAccountId);
+  await syncConnectAccount(live);
+  await ensureTradeLicense(account.stripeAccountId, input.sellerId, input.tradeLicenseDocumentUrl, live.requirements);
 
   const base = loadEnv().SELLER_DASHBOARD_URL.replace(/\/+$/, "");
   const link = await getStripeClient().accountLinks.create({
