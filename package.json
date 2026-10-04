@@ -27,7 +27,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "// --- Stripe Tooling ---": "",
-    "stripe:listen": "stripe listen --forward-to localhost:9101/webhooks/stripe --forward-connect-to localhost:9101/webhooks/stripe/connect",
+    "stripe:listen": "node --env-file=.env.local scripts/stripe-listen.mjs",
     "smoke": "tsx scripts/smoke-internal.ts"
   },
   "dependencies": {
