@@ -36,6 +36,17 @@ export type SetupIntentResult = {
 type AuditActor = Pick<AuditEntry, "actorType" | "actorId" | "service" | "ip">;
 
 export class CardService {
+  /** True when Stripe knows the customer and it has not been deleted. Other errors propagate. */
+  private static async stripeCustomerExists(customerId: string): Promise<boolean> {
+    try {
+      const customer = await getStripeClient().customers.retrieve(customerId);
+      return !("deleted" in customer && customer.deleted);
+    } catch (error) {
+      if ((error as { code?: string })?.code === "resource_missing") return false;
+      throw error;
+    }
+  }
+
   /**
    * Ensure the buyer has a Stripe Customer, creating one the first time.
    *
@@ -43,7 +54,17 @@ export class CardService {
    * attaches to the same customer rather than stranding cards across several.
    */
   private static async ensureStripeCustomer(buyer: BuyerRecord, actorUserId: string): Promise<string> {
-    if (buyer.stripeCustomerId) return buyer.stripeCustomerId;
+    if (buyer.stripeCustomerId) {
+      // The id is stored in a database several environments can share, so it
+      // may name a customer this Stripe account has never heard of. Using it
+      // blind made every SetupIntent fail with an unhandled "No such customer".
+      if (await CardService.stripeCustomerExists(buyer.stripeCustomerId)) return buyer.stripeCustomerId;
+
+      logger.warn("Saved Stripe customer not found in this account; creating a new one", {
+        buyerId: buyer.id,
+        staleCustomerId: buyer.stripeCustomerId,
+      });
+    }
 
     const user = await prisma.user.findUnique({
       where: { id: buyer.userId },

@@ -236,7 +236,7 @@ export class CheckoutService {
         customer_email: quote.buyer.email || undefined,
         // Ownership of the session, checked before its status is ever shown.
         client_reference_id: quote.buyer.userId,
-        payment_intent_data: { metadata: quote.metadata },
+        payment_intent_data: { metadata: quote.metadata, transfer_group: `order_${quote.orderNumber}` },
         metadata: quote.metadata,
         success_url: `${input.successUrl}${input.successUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}&order_number=${quote.orderNumber}`,
         cancel_url: input.cancelUrl,

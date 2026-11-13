@@ -26,6 +26,56 @@ function mockTransaction(txClient: Record<string, unknown>): void {
     fn(txClient)) as never);
 }
 
+describe("starting card setup", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const setupIntents = () => ({
+    create: vi.fn().mockResolvedValue({ id: "seti_1", client_secret: "seti_1_secret" }),
+  });
+
+  it("reuses a saved customer that Stripe knows", async () => {
+    mockBuyer();
+    const si = setupIntents();
+    const customers = { retrieve: vi.fn().mockResolvedValue({ id: "cus_1" }), create: vi.fn() };
+    mockStripe({ customers, setupIntents: si });
+
+    const result = await CardService.createSetupIntent("usr_1", ACTOR);
+
+    expect(customers.create).not.toHaveBeenCalled();
+    expect(si.create).toHaveBeenCalledWith(expect.objectContaining({ customer: "cus_1" }));
+    expect(result.customerId).toBe("cus_1");
+  });
+
+  it("replaces a saved customer id Stripe does not recognise", async () => {
+    mockBuyer();
+    vi.spyOn(prisma.user, "findUnique").mockResolvedValue({ email: "a@b.co", firstName: "A", lastName: "B" } as never);
+    const update = vi.spyOn(prisma.buyer, "update").mockResolvedValue({} as never);
+    const si = setupIntents();
+    const customers = {
+      retrieve: vi.fn().mockRejectedValue(Object.assign(new Error("No such customer"), { code: "resource_missing" })),
+      create: vi.fn().mockResolvedValue({ id: "cus_new" }),
+    };
+    mockStripe({ customers, setupIntents: si });
+
+    const result = await CardService.createSetupIntent("usr_1", ACTOR);
+
+    expect(result.customerId).toBe("cus_new");
+    expect(update).toHaveBeenCalledWith({ where: { id: "buy_1" }, data: { stripeCustomerId: "cus_new" } });
+    expect(si.create).toHaveBeenCalledWith(expect.objectContaining({ customer: "cus_new" }));
+  });
+
+  it("does not paper over other Stripe failures", async () => {
+    mockBuyer();
+    const customers = { retrieve: vi.fn().mockRejectedValue(Object.assign(new Error("rate limited"), { code: "rate_limit" })), create: vi.fn() };
+    mockStripe({ customers, setupIntents: setupIntents() });
+
+    await expect(CardService.createSetupIntent("usr_1", ACTOR)).rejects.toThrow("rate limited");
+    expect(customers.create).not.toHaveBeenCalled();
+  });
+});
+
 describe("saving a card", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
