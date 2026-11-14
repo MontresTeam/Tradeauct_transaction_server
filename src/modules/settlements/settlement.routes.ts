@@ -104,6 +104,39 @@ async function resolveSellerId(req: Request): Promise<string> {
   return seller.id;
 }
 
+/** What an admin needs to recognise a seller. Deliberately excludes bank and identity data. */
+const sellerSummarySelect = {
+  id: true,
+  sellerType: true,
+  approvalStatus: true,
+  user: { select: { firstName: true, lastName: true, email: true, mobileNumber: true, country: true } },
+  businessProfile: { select: { businessName: true, legalBusinessName: true } },
+  individualProfile: { select: { storeName: true, fullName: true, city: true } },
+  addresses: { take: 1, select: { city: true, country: { select: { name: true } } } },
+} as const;
+
+function presentSeller(seller: any): Record<string, unknown> | null {
+  if (!seller) return null;
+
+  const personName = `${seller.user?.firstName ?? ""} ${seller.user?.lastName ?? ""}`.trim();
+  const businessName = seller.businessProfile?.businessName || seller.businessProfile?.legalBusinessName || null;
+  const storeName = seller.individualProfile?.storeName || null;
+  const address = seller.addresses?.[0];
+  const city = address?.city || seller.individualProfile?.city || null;
+  const country = address?.country?.name || seller.user?.country || null;
+
+  return {
+    id: seller.id,
+    type: seller.sellerType,
+    approvalStatus: seller.approvalStatus,
+    name: businessName || storeName || seller.individualProfile?.fullName || personName || "Unknown seller",
+    contactName: personName || null,
+    email: seller.user?.email ?? null,
+    phone: seller.user?.mobileNumber ?? null,
+    location: [city, country].filter(Boolean).join(", ") || null,
+  };
+}
+
 /** The shape both dashboards render. Amounts stay in major units for display. */
 function presentSettlement(settlement: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -295,6 +328,7 @@ export function createSettlementRouter(security: Security): Router {
         data: {
           ...presentSettlement(settlement),
           orderNumber: settlement.fulfillmentOrder?.orderNumber ?? null,
+          seller: presentSeller((settlement as any).seller),
           adjustments: settlement.adjustments,
         },
       });
@@ -407,7 +441,10 @@ export function createSettlementRouter(security: Security): Router {
           orderBy: { createdAt: "desc" },
           skip: (query.page - 1) * query.pageSize,
           take: query.pageSize,
-          include: { fulfillmentOrder: { select: { orderNumber: true } } },
+          include: {
+            fulfillmentOrder: { select: { orderNumber: true } },
+            seller: { select: sellerSummarySelect },
+          },
         }),
         prisma.sellerSettlement.count({ where }),
       ]);
@@ -417,6 +454,7 @@ export function createSettlementRouter(security: Security): Router {
         data: rows.map((row) => ({
           ...presentSettlement(row),
           orderNumber: row.fulfillmentOrder?.orderNumber ?? null,
+          seller: presentSeller((row as any).seller),
         })),
         pagination: { page: query.page, pageSize: query.pageSize, total },
       });
@@ -435,6 +473,7 @@ export function createSettlementRouter(security: Security): Router {
         where: { id: settlementId },
         include: {
           fulfillmentOrder: { select: { orderNumber: true, listingId: true, buyerId: true } },
+          seller: { select: sellerSummarySelect },
           adjustments: { orderBy: { createdAt: "desc" } },
           auditLogs: { orderBy: { createdAt: "desc" }, take: 50 },
           recoveries: { orderBy: { createdAt: "desc" } },
